@@ -77,11 +77,18 @@ function ServerMenu({ server, onChanged, onError, onShowKey, onEdit, onDelete }:
 function ManualPrompt({ server, disabledReason, onRun, onError }: { server: ServerView; disabledReason: string | null; onRun: () => void; onError: (m: string) => void }) {
   const [command, setCommand] = useState('')
   const [sending, setSending] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const refocus = useRef(false)
+
+  useEffect(() => {
+    if (refocus.current && !disabledReason && !sending) inputRef.current?.focus()
+  }, [disabledReason, sending])
 
   async function submit() {
     const text = command.trim()
     if (!text || disabledReason) return
     setSending(true)
+    refocus.current = true
     try {
       await api.runManual(server.id, text)
       setCommand('')
@@ -104,6 +111,10 @@ function ManualPrompt({ server, disabledReason, onRun, onError }: { server: Serv
     <div className={`prompt${disabledReason ? ' disabled' : ''}`}>
       <span className="prompt-sign">$</span>
       <input
+        ref={inputRef}
+        onBlur={() => {
+          if (!inputRef.current?.disabled) refocus.current = false
+        }}
         value={command}
         onChange={(e) => setCommand(e.target.value)}
         onKeyDown={onKey}
@@ -211,7 +222,7 @@ export function ServerScreen(props: Props) {
           </div>
         )}
         {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
-        {polled.data && <Journal requests={finished} />}
+        {polled.data && <Journal requests={finished} onShared={refresh} onError={onError} />}
         {running && <RunCard request={running} onError={onError} />}
         {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={server.busy || !!running} onDone={refresh} onError={onError} />}
       </div>

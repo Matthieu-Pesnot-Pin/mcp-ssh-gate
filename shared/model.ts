@@ -41,6 +41,8 @@ export interface GateRequest {
   note: string | null;
   decidedAt: string | null;
   finishedAt: string | null;
+  /** Instant où l'utilisateur a envoyé sa commande aux agents ; null tant qu'il ne l'a pas fait. */
+  sharedAt: string | null;
   /** Erreur qui a arrêté l'exécution hors du code de retour d'une commande (connexion perdue…). */
   error: string | null;
   /** Répertoire courant du shell à la fin de l'exécution. */

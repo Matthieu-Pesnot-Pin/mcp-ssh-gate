@@ -41,7 +41,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "enable_notifications",
     description:
-      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), without blocking on wait_for_result. " +
+      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), and when the user sends you a command they ran themselves, without blocking on wait_for_result. " +
       "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
       "Call it once at the start of the session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {

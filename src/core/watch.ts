@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isFinalStatus, type CommandStatus, type GateRequest, type RequestStatus } from "../../shared/model.js";
+import { isFinalStatus, type CommandStatus, type GateRequest, type RequestSource, type RequestStatus } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import { readJson, writeJsonAtomic } from "./files.js";
 import { RequestStore } from "./request-store.js";
@@ -27,8 +27,10 @@ export function newSessionId(): string {
 export interface FinishedRequest {
   id: string;
   serverId: string;
+  source: RequestSource;
   status: RequestStatus;
-  finishedMs: number;
+  /** Instant à annoncer : fin de la demande de l'agent, ou envoi par l'utilisateur. */
+  eventMs: number;
   note: string | null;
   error: string | null;
   commands: { status: CommandStatus; exitCode: number | null }[];
@@ -41,9 +43,10 @@ interface CachedEntry {
 }
 
 /**
- * Lit les demandes terminées d'une session. Le curseur est l'instant de fin, en
- * millisecondes, de la dernière demande déjà annoncée. Seuls les fichiers modifiés
- * depuis la lecture précédente sont relus.
+ * Lit les demandes à annoncer à une session : celles qu'elle a soumises, une fois
+ * terminées, et les commandes que l'utilisateur a envoyées aux agents. Le curseur est
+ * l'instant, en millisecondes, du dernier événement déjà annoncé. Seuls les fichiers
+ * modifiés depuis la lecture précédente sont relus.
  */
 export class FinishedRequestScanner {
   private readonly cache = new Map<string, CachedEntry>();
@@ -53,7 +56,7 @@ export class FinishedRequestScanner {
     private readonly session: string
   ) {}
 
-  /** Demandes soumises par la session et terminées après `cursor`, dans l'ordre de fin. */
+  /** Demandes à annoncer après `cursor`, dans l'ordre des événements. */
   since(cursor: number): FinishedRequest[] {
     const found: FinishedRequest[] = [];
     for (const { file, mtimeMs } of this.requests.files()) {
@@ -66,19 +69,21 @@ export class FinishedRequestScanner {
         }
         this.cache.set(file, entry);
       }
-      if (entry.finished && entry.finished.finishedMs > cursor) found.push(entry.finished);
+      if (entry.finished && entry.finished.eventMs > cursor) found.push(entry.finished);
     }
-    return found.sort((a, b) => a.finishedMs - b.finishedMs);
+    return found.sort((a, b) => a.eventMs - b.eventMs);
   }
 
   private toFinished(request: GateRequest): FinishedRequest | null {
-    if (request.source !== "agent" || request.sessionId !== this.session) return null;
     if (!isFinalStatus(request.status) || request.status === "cancelled" || !request.finishedAt) return null;
+    const eventAt = request.source === "agent" ? (request.sessionId === this.session ? request.finishedAt : null) : request.sharedAt;
+    if (!eventAt) return null;
     return {
       id: request.id,
       serverId: request.serverId,
+      source: request.source,
       status: request.status,
-      finishedMs: Date.parse(request.finishedAt),
+      eventMs: Date.parse(eventAt),
       note: request.note,
       error: request.error,
       commands: request.commands.map((c) => ({ status: c.status, exitCode: c.exitCode })),
@@ -88,7 +93,7 @@ export class FinishedRequestScanner {
 
 /** Curseur après annonce des demandes données. */
 export function advanceCursor(cursor: number, announced: FinishedRequest[]): number {
-  return announced.reduce((max, request) => Math.max(max, request.finishedMs), cursor);
+  return announced.reduce((max, request) => Math.max(max, request.eventMs), cursor);
 }
 
 function oneLine(text: string, max: number): string {
@@ -123,7 +128,8 @@ export function formatEvent(request: FinishedRequest): string {
       outcome = request.status;
   }
   const note = request.note && request.status !== "refused" ? " — the user left a note" : "";
-  return `[ssh-gate] ${request.serverId} — request ${request.id} ${outcome}${note} — read it with wait_for_result, request_id ${request.id}`;
+  const subject = request.source === "user" ? `the user shared ${total} command(s) they ran themselves (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
+  return `[ssh-gate] ${request.serverId} — ${subject}${note} — read it with wait_for_result, request_id ${request.id}`;
 }
 
 // --- Veilleur local ----------------------------------------------------------------

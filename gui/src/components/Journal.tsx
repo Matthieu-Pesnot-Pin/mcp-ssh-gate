@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Ban, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, OctagonX } from 'lucide-react'
+import { Ban, Check, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, OctagonX, Send } from 'lucide-react'
 import type { CommandRun, GateRequest } from '@shared/model'
+import { api } from '../api'
 import { clock, plural, seconds } from '../format'
 
 function StatusIcon({ command }: { command: CommandRun }) {
@@ -82,12 +83,47 @@ function ClosedEntry({ request }: { request: GateRequest }) {
   )
 }
 
+/** Commande saisie par l'utilisateur : envoi du résultat aux agents, une seule fois. */
+function ShareRow({ request, onShared, onError }: { request: GateRequest; onShared: () => void; onError: (message: string) => void }) {
+  const [sending, setSending] = useState(false)
+
+  async function share() {
+    setSending(true)
+    try {
+      await api.share(request.id)
+      onShared()
+    } catch (err) {
+      onError((err as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="share-row">
+      {request.sharedAt ? (
+        <span className="share-done">
+          <Check size={14} />
+          Envoyée à l'agent à {clock(request.sharedAt)}
+        </span>
+      ) : (
+        <button className="btn btn-secondary btn-sm" onClick={() => void share()} disabled={sending}>
+          <Send size={14} />
+          Envoyer à l'agent
+        </button>
+      )}
+    </div>
+  )
+}
+
 interface Props {
   requests: GateRequest[]
+  onShared: () => void
+  onError: (message: string) => void
 }
 
 /** Historique du serveur : les demandes terminées, les plus anciennes en haut. */
-export function Journal({ requests }: Props) {
+export function Journal({ requests, onShared, onError }: Props) {
   if (requests.length === 0) {
     return <div className="empty-journal">Aucune commande exécutée sur ce serveur pour l'instant.</div>
   }
@@ -113,6 +149,7 @@ export function Journal({ requests }: Props) {
                 {request.note && <div>Note pour l'agent : {request.note}</div>}
               </div>
             )}
+            {request.source === 'user' && <ShareRow request={request} onShared={onShared} onError={onError} />}
           </div>
         )
       })}

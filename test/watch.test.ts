@@ -127,6 +127,26 @@ test("behind the gateway: enable_notifications returns a watch specification and
   assert.deepEqual((second._meta?.["gateway/events"] as { lines: string[] }).lines, []);
 });
 
+test("a command typed by the user is announced to every session once the user shares it", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-share-"));
+  const store = new RequestStore(dataDir);
+  const typed = store.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["df -h"] });
+  finish(store, typed.id);
+  const scanner = new FinishedRequestScanner(store, "ses_any");
+  assert.deepEqual(scanner.since(0), []);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const cursor = Date.now();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  store.update(typed.id, (draft) => {
+    draft.sharedAt = new Date().toISOString();
+  });
+  const [shared] = scanner.since(cursor);
+  assert.equal(formatEvent(shared), `[ssh-gate] web — the user shared 1 command(s) they ran themselves (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id ${typed.id}`);
+  assert.deepEqual(new FinishedRequestScanner(store, "ses_other").since(cursor).map((r) => r.id), [typed.id]);
+  assert.deepEqual(scanner.since(shared.eventMs), []);
+});
+
 test("event lines describe refusals", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-event-"));
   const store = new RequestStore(dataDir);

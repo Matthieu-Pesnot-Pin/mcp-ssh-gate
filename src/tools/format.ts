@@ -53,7 +53,7 @@ function formatCommand(command: CommandRun, index: number, maxOutput: number): s
 /** Demande lisible par l'agent : statut, note de l'utilisateur, commandes avec leur sortie. */
 export function formatRequest(request: GateRequest, server: StoredServer | null, maxOutput: number): string {
   const target = server ? `${server.id} (${server.username}@${server.host})` : request.serverId;
-  const author = request.source === "user" ? " — typed by the user" : "";
+  const author = request.source === "user" ? ` — typed by the user${request.sharedAt ? " and shared with you" : ""}` : "";
   const lines = [`Request ${request.id} on ${target}${author}: ${STATUS_TEXT[request.status]}.`];
 
   if (request.explanation) lines.push(`Your explanation: ${request.explanation}`);

@@ -48,5 +48,6 @@ export const api = {
   removeCommand: (id: string, index: number) => send<GateRequest>('DELETE', `${req(id)}/commands/${index}`),
   approve: (id: string, note: string) => send<GateRequest>('POST', `${req(id)}/approve`, { note }),
   refuse: (id: string, note: string) => send<GateRequest>('POST', `${req(id)}/refuse`, { note }),
+  share: (id: string) => send<GateRequest>('POST', `${req(id)}/share`),
   interrupt: (id: string) => send<{ interrupted: true }>('POST', `${req(id)}/interrupt`),
 }

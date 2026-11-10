@@ -1,4 +1,4 @@
-import type { GateRequest, RequestStatus, ServerView } from "../../shared/model.js";
+import { isFinalStatus, type GateRequest, type RequestStatus, type ServerView } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import type { RequestStore } from "./request-store.js";
 import { toPublic, type ServerInput, type ServerStore, type StoredServer } from "./server-store.js";
@@ -169,6 +169,16 @@ export class Executor {
     });
     this.start(updated);
     return updated;
+  }
+
+  /** Envoie aux agents une commande saisie par l'utilisateur et terminée. */
+  share(requestId: string): GateRequest {
+    return this.requests.update(requestId, (draft) => {
+      if (draft.source !== "user") throw new GateError("Seules tes propres commandes s'envoient à l'agent.");
+      if (!isFinalStatus(draft.status)) throw new GateError("La commande n'est pas encore terminée.");
+      if (draft.sharedAt) throw new GateError("Cette commande a déjà été envoyée à l'agent.");
+      draft.sharedAt = now();
+    });
   }
 
   async interrupt(requestId: string): Promise<void> {

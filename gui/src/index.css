@@ -376,6 +376,20 @@ p {
   color: var(--muted);
 }
 
+.share-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.share-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
 .status-ok {
   color: var(--ok);
 }
@@ -767,6 +781,13 @@ p {
   font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.btn-sm {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  gap: 6px;
 }
 
 .btn-primary {

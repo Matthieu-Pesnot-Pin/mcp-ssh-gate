@@ -157,6 +157,7 @@ app.post("/api/servers/:id/manual", handle(async (c) => executor.runManual(c.req
 app.put("/api/requests/:id/commands/:index", handle(async (c) => executor.editCommand(c.req.param("id")!, commandIndex(c), (await readBody(c))?.command)));
 app.delete("/api/requests/:id/commands/:index", handle((c) => executor.removeCommand(c.req.param("id")!, commandIndex(c))));
 app.post("/api/requests/:id/approve", handle(async (c) => executor.approve(c.req.param("id")!, (await readBody(c))?.note)));
+app.post("/api/requests/:id/share", handle((c) => executor.share(c.req.param("id")!)));
 app.post("/api/requests/:id/refuse", handle(async (c) => executor.refuse(c.req.param("id")!, (await readBody(c))?.note)));
 app.post(
   "/api/requests/:id/interrupt",

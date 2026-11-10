@@ -58,6 +58,7 @@ export class RequestStore {
       note: null,
       decidedAt: null,
       finishedAt: null,
+      sharedAt: null,
       error: null,
       cwd: null,
       commands: commands.map((command) => ({

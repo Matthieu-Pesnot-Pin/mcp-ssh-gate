@@ -175,7 +175,11 @@ L'agent lit ensuite le résultat avec `wait_for_result`, qui répond aussitôt.
 
 `wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway : le veilleur de chacun annonce les demandes soumises par tous.
 
-Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les commandes que tu tapes toi-même et les demandes que l'agent a retirées ne sont pas annoncées.
+Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les demandes que l'agent a retirées ne sont pas annoncées. Une commande que tu tapes toi-même ne l'est que si tu cliques sur **Envoyer à l'agent** sous son résultat : elle est alors annoncée à tous les agents qui ont activé les notifications.
+
+```
+[ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id 0mwb2k1qa-7f03c2
+```
 
 ## Notes du serveur
 
@@ -199,7 +203,7 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 - **Demande en attente** : l'explication de l'agent, les commandes numérotées. Au survol d'une ligne, le crayon la modifie (Entrée pour valider, Échap pour annuler) et la croix la retire. La note pour l'agent est jointe au résultat, ou sert de motif au refus.
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
 - **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
-- **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique.
+- **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Le bouton **Envoyer à l'agent**, sous le résultat, le notifie de cette commande.
 
 L'interface se met à jour par rafraîchissement périodique.
 
