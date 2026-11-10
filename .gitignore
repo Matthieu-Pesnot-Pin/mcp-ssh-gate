@@ -1,0 +1,26 @@
+# Dépendances et builds
+node_modules/
+dist/
+gui/dist/
+gui/node_modules/
+
+# Configuration locale : peut contenir VAULT_KEY
+.env
+.mcp.json
+
+# Données : serveurs, clés chiffrées, historique des commandes
+.ssh-gate-data/
+data/
+
+# Logs et fichiers temporaires
+logs/
+*.log
+*.tmp
+*.lock
+
+# Éditeurs et système
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

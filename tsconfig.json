@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "sourceMap": false,
+    "declaration": true,
+    "isolatedModules": true
+  },
+  "include": ["src/**/*", "shared/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist", "gui"]
+}
