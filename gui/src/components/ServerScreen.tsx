@@ -5,6 +5,7 @@ import { api } from '../api'
 import { usePolling } from '../usePolling'
 import { Journal } from './Journal'
 import { RequestCard, RunCard } from './Cards'
+import { NotesView } from './NotesView'
 
 interface Props {
   server: ServerView
@@ -141,6 +142,8 @@ export function ServerScreen(props: Props) {
     onChanged()
   }
 
+  const [tab, setTab] = useState<'session' | 'notes'>('session')
+
   const tested = !!server.hostKeyFingerprint
   const disabledReason = !tested
     ? 'Teste la connexion avant d’exécuter des commandes'
@@ -160,6 +163,15 @@ export function ServerScreen(props: Props) {
           </div>
         </div>
         <span className="topbar-spacer" />
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'session'} className={`tab${tab === 'session' ? ' active' : ''}`} onClick={() => setTab('session')}>
+            Session
+            {server.pendingCount > 0 && <span className="badge tab-badge">{server.pendingCount}</span>}
+          </button>
+          <button role="tab" aria-selected={tab === 'notes'} className={`tab${tab === 'notes' ? ' active' : ''}`} onClick={() => setTab('notes')}>
+            Notes
+          </button>
+        </div>
         {server.session === 'connected' ? (
           <span className="chip ok">
             <span className="dot on" />
@@ -174,8 +186,15 @@ export function ServerScreen(props: Props) {
         <ServerMenu {...props} />
       </header>
 
+      {tab === 'notes' && (
+        <div className="content">
+          <NotesView server={server} onSaved={onChanged} />
+        </div>
+      )}
+
       <div
         className="content"
+        style={tab === 'session' ? undefined : { display: 'none' }}
         ref={scrollRef}
         onScroll={(e) => {
           const box = e.currentTarget
@@ -197,7 +216,7 @@ export function ServerScreen(props: Props) {
         {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={server.busy || !!running} onDone={refresh} onError={onError} />}
       </div>
 
-      <footer className="footer">
+      <footer className="footer" style={tab === 'session' ? undefined : { display: 'none' }}>
         <ManualPrompt server={server} disabledReason={disabledReason} onRun={refresh} onError={onError} />
       </footer>
     </main>

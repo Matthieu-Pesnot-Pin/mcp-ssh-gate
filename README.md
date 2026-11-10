@@ -74,12 +74,19 @@ Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de co
 
 | Outil | Rôle |
 |---|---|
-| `list_servers` | Serveurs configurés, et si leur connexion a été testée. |
+| `list_servers` | Serveurs configurés, si leur connexion a été testée, et leurs notes. |
+| `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
 | `submit_commands` | Soumet 1 à 20 commandes avec une explication. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
 | `wait_for_result` | Attend ta décision et la fin de l'exécution, puis renvoie le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Rend la main au bout de `timeout_seconds` (300 par défaut, 1800 au plus) : il suffit de le rappeler. |
 | `cancel_request` | Retire une demande pas encore validée. |
 | `get_history` | Dernières demandes d'un serveur, y compris les commandes que tu as tapées toi-même. |
 | `reconnect_gui` | Relance l'interface si elle ne tourne plus, et donne son URL. |
+
+## Notes du serveur
+
+Chaque serveur porte des notes en texte libre : dossier des sites, gestion des applis (PM2, systemd…), emplacement des configurations, règles à respecter. L'agent les reçoit avec `list_servers` avant d'intervenir et les complète avec `update_server_notes` quand il découvre quelque chose d'utile ; tu les lis et les modifies dans l'onglet **Notes** du serveur.
+
+Les notes sont limitées à 20 000 caractères. Une modification faite dans l'interface est refusée si l'agent a changé les notes pendant la saisie, pour ne pas écraser sa mise à jour.
 
 ## Exécution
 
@@ -96,6 +103,7 @@ Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de co
 - **Journal** : chaque commande exécutée, son auteur (Agent ou Toi), son heure, son code de retour ; un clic déplie sa sortie.
 - **Demande en attente** : l'explication de l'agent, les commandes numérotées. Au survol d'une ligne, le crayon la modifie (Entrée pour valider, Échap pour annuler) et la croix la retire. La note pour l'agent est jointe au résultat, ou sert de motif au refus.
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
+- **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
 - **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique.
 
 L'interface se met à jour par rafraîchissement périodique.
@@ -113,3 +121,9 @@ npm install
 npm run build   # serveur et interface
 npm test        # dont un test de bout en bout contre un faux serveur SSH qui exécute bash
 ```
+
+## Publication
+
+Chaque push sur `master`, merge de pull request compris, publie une nouvelle version sur npm (`.github/workflows/publish.yml`) : `npm ci`, build, tests, puis `npm version patch`, `npm publish`, et enfin le push sur `master` du commit et du tag de version. La publication passe par le trusted publishing de npm (OIDC, sans token), avec attestation de provenance. Un échec du build ou des tests arrête le workflow avant la montée de version ; un échec de `npm publish` l'arrête avant le push, si bien que relancer le run reprend la même version.
+
+Sur npmjs.com, le paquet déclare ce workflow comme publieur de confiance (Settings → Trusted publishing → GitHub Actions : `Matthieu-Pesnot-Pin`, `mcp-ssh-gate`, `publish.yml`, avec `npm publish` dans les actions autorisées). Le commit de version est poussé avec `GITHUB_TOKEN` : si `master` est protégée, la règle doit autoriser GitHub Actions à y pousser.

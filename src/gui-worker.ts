@@ -143,6 +143,15 @@ app.post(
     return executor.view(servers.get(server.id));
   })
 );
+app.put(
+  "/api/servers/:id/notes",
+  handle(async (c) => {
+    const body = await readBody(c);
+    const server = servers.get(c.req.param("id")!);
+    const expected = body?.expectedUpdatedAt === undefined ? null : body.expectedUpdatedAt;
+    return executor.view(servers.setNotes(server.id, body?.notes, "user", expected));
+  })
+);
 app.post("/api/servers/:id/manual", handle(async (c) => executor.runManual(c.req.param("id")!, (await readBody(c))?.command)));
 
 app.put("/api/requests/:id/commands/:index", handle(async (c) => executor.editCommand(c.req.param("id")!, commandIndex(c), (await readBody(c))?.command)));

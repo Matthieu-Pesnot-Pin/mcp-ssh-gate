@@ -27,13 +27,30 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "list_servers",
     description:
-      "List the SSH servers configured in the GUI, with their user, host and whether their connection has been tested. Commands can only be submitted to a tested server.",
+      "List the SSH servers configured in the GUI, with their user, host, whether their connection has been tested, and their notes: the context gathered on each server (where the sites live, how apps are managed, rules to follow). " +
+      "Read them before submitting commands. Commands can only be submitted to a tested server.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "update_server_notes",
+    description:
+      `Record context about a server so that later sessions do not have to rediscover it: where the websites live, how the apps are run (PM2, systemd, Docker…), config locations, rules the user gave. ` +
+      `Keep notes short and factual, one fact per line. mode "append" (default) adds lines at the end; mode "replace" rewrites the whole text: start from the current notes returned by list_servers and keep every line the user wrote. ` +
+      `The user sees and can edit the notes in the GUI.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        server: { type: "string", description: "Server id or name." },
+        notes: { type: "string", description: "Lines to add, or the full new text with mode \"replace\"." },
+        mode: { type: "string", enum: ["append", "replace"], description: "\"append\" (default) or \"replace\"." },
+      },
+      required: ["server", "notes"],
+    },
   },
   {
     name: "submit_commands",
     description:
-      `Submit shell commands to run on a server. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
+      `Submit shell commands to run on a server. Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
       `Approved commands run in order in a persistent bash shell (cd and export carry over between commands and between requests), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
       `Execution stops at the first command that exits non-zero. Returns a request_id: call wait_for_result with it. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
@@ -109,6 +126,11 @@ const WaitArgs = z.object({
   timeout_seconds: z.number().positive().max(MAX_WAIT_SECONDS).optional(),
 });
 const RequestArgs = z.object({ request_id: z.string().min(1) });
+const NotesArgs = z.object({
+  server: z.string().min(1),
+  notes: z.string(),
+  mode: z.enum(["append", "replace"]).optional(),
+});
 const HistoryArgs = z.object({
   server: z.string().min(1),
   limit: z.number().int().min(1).max(50).optional(),
@@ -150,10 +172,24 @@ function listServers(ctx: ToolContext): CallToolResult {
     const url = ctx.guiUrl();
     return text(`No server is configured yet. Ask the user to add one in the GUI${url ? ` (${url})` : ""}.`);
   }
-  const lines = servers.map(
-    (s) => `- ${s.id} — "${s.name}" — ${s.username}@${s.host}:${s.port} — ${s.hostKeyFingerprint ? "ready" : "connection not tested yet: commands cannot be submitted"}`
-  );
-  return text(lines.join("\n"));
+  const blocks = servers.map((s) => {
+    const head = `- ${s.id} — "${s.name}" — ${s.username}@${s.host}:${s.port} — ${s.hostKeyFingerprint ? "ready" : "connection not tested yet: commands cannot be submitted"}`;
+    if (!s.notes) return `${head}\n  Notes: none yet. Record what you learn about this server with update_server_notes.`;
+    const author = s.notesUpdatedBy === "user" ? "the user" : "an agent";
+    const indented = s.notes.split("\n").map((line) => `    ${line}`).join("\n");
+    return `${head}\n  Notes (last updated by ${author} on ${s.notesUpdatedAt}):\n${indented}`;
+  });
+  return text(blocks.join("\n\n"));
+}
+
+function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
+  const { server: serverRef, notes, mode } = parse(NotesArgs, args);
+  const server = ctx.servers.get(serverRef);
+  const addition = notes.trim();
+  if (!addition && mode !== "replace") throw new GateError("notes must not be empty.");
+  const next = mode === "replace" || !server.notes ? addition : `${server.notes}\n${addition}`;
+  const saved = ctx.servers.setNotes(server.id, next, "agent");
+  return text(`Notes of ${saved.id} saved (${saved.notes.length} characters). The user sees them in the GUI.`);
 }
 
 function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
@@ -219,6 +255,8 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown, si
     switch (name) {
       case "list_servers":
         return listServers(ctx);
+      case "update_server_notes":
+        return updateServerNotes(ctx, args);
       case "submit_commands":
         return submitCommands(ctx, args);
       case "wait_for_result":

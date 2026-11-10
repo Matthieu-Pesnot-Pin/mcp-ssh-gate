@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import ssh2 from "ssh2";
-import type { ServerPublic } from "../../shared/model.js";
+import { MAX_NOTES_LENGTH, type NotesAuthor, type ServerPublic } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import { readJson, withFileLock, writeJsonAtomic } from "./files.js";
 import { decryptSecret, encryptSecret } from "./vault.js";
@@ -73,7 +73,12 @@ export class ServerStore {
 
   list(): StoredServer[] {
     if (!fs.existsSync(this.file)) return [];
-    return readJson<ServersFile>(this.file).servers;
+    return readJson<ServersFile>(this.file).servers.map((server) => ({
+      ...server,
+      notes: server.notes ?? "",
+      notesUpdatedAt: server.notesUpdatedAt ?? null,
+      notesUpdatedBy: server.notesUpdatedBy ?? null,
+    }));
   }
 
   /** Retrouve un serveur par identifiant ou par nom (sans tenir compte de la casse). */
@@ -100,6 +105,9 @@ export class ServerStore {
         publicKey: keys.public,
         hostKeyFingerprint: null,
         createdAt: new Date().toISOString(),
+        notes: "",
+        notesUpdatedAt: null,
+        notesUpdatedBy: null,
         privateKeyEncrypted: encryptSecret(keys.private, this.vaultKey),
       };
       servers.push(server);
@@ -124,6 +132,30 @@ export class ServerStore {
       const server = servers.find((s) => s.id === id);
       if (!server) throw new GateError(`Unknown server "${id}".`);
       server.hostKeyFingerprint = fingerprint;
+      return server;
+    });
+  }
+
+  /**
+   * Remplace les notes. Avec `expectedUpdatedAt`, l'écriture est refusée si les
+   * notes ont changé depuis cette date : une saisie ne doit pas écraser une
+   * mise à jour faite entre-temps par l'agent ou par un autre onglet.
+   */
+  setNotes(id: string, text: string, by: NotesAuthor, expectedUpdatedAt?: string | null): StoredServer {
+    const notes = String(text ?? "").replace(/\r\n/g, "\n").trim();
+    if (notes.length > MAX_NOTES_LENGTH) {
+      throw new GateError(`Notes are limited to ${MAX_NOTES_LENGTH} characters (${notes.length} given).`);
+    }
+    return this.mutate((servers) => {
+      const server = servers.find((s) => s.id === id);
+      if (!server) throw new GateError(`Unknown server "${id}".`);
+      if (expectedUpdatedAt !== undefined && (server.notesUpdatedAt ?? null) !== expectedUpdatedAt) {
+        const author = server.notesUpdatedBy === "agent" ? "l'agent" : "un autre onglet";
+        throw new GateError(`Les notes ont été modifiées par ${author} pendant ta saisie. Copie ton texte, annule, puis reprends à partir de la nouvelle version.`);
+      }
+      server.notes = notes;
+      server.notesUpdatedAt = new Date().toISOString();
+      server.notesUpdatedBy = by;
       return server;
     });
   }

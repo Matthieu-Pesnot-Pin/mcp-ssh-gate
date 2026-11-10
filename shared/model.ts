@@ -56,7 +56,15 @@ export interface ServerPublic {
   /** Empreinte SHA256 de la clé d'hôte, enregistrée au premier test de connexion. */
   hostKeyFingerprint: string | null;
   createdAt: string;
+  /** Contexte du serveur en texte libre, lu par l'agent avant d'intervenir. */
+  notes: string;
+  notesUpdatedAt: string | null;
+  notesUpdatedBy: NotesAuthor | null;
 }
+
+export type NotesAuthor = "agent" | "user";
+
+export const MAX_NOTES_LENGTH = 20_000;
 
 export type SessionState = "connected" | "closed";
 

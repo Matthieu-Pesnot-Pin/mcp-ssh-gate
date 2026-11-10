@@ -40,6 +40,8 @@ export const api = {
   updateServer: (id: string, fields: ServerFields) => send<ServerView>('PUT', server(id), fields),
   deleteServer: (id: string) => send<{ deleted: true }>('DELETE', server(id)),
   testConnection: (id: string) => send<TestConnectionResponse>('POST', `${server(id)}/test`),
+  updateNotes: (id: string, notes: string, expectedUpdatedAt: string | null) =>
+    send<ServerView>('PUT', `${server(id)}/notes`, { notes, expectedUpdatedAt }),
   disconnect: (id: string) => send<ServerView>('POST', `${server(id)}/disconnect`),
   runManual: (id: string, command: string) => send<GateRequest>('POST', `${server(id)}/manual`, { command }),
   editCommand: (id: string, index: number, command: string) => send<GateRequest>('PUT', `${req(id)}/commands/${index}`, { command }),

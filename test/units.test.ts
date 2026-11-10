@@ -10,6 +10,7 @@ import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
 import { formatRequest } from "../src/tools/format.js";
 import { runSetupMcp } from "../src/cli/setup-mcp.js";
+import { callTool } from "../src/tools/tools.js";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-test-"));
@@ -53,6 +54,28 @@ test("server store keeps the private key encrypted and verifies the vault", () =
   assert.equal(store.update("prod-web", { name: "Prod Web", host: "10.0.0.13", port: 22, username: "deploy" }).hostKeyFingerprint, null);
 
   assert.throws(() => new ServerStore(dir, parseVaultKey(generateVaultKey())).verifyVault(), /does not decrypt the private key of server "Prod Web"/);
+});
+
+test("server notes: the agent appends or replaces, a stale user edit is refused", async () => {
+  const dir = tempDir();
+  const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
+  const requests = new RequestStore(dir);
+  servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
+  const ctx = { servers, requests, ensureGui: () => {}, guiUrl: () => null, reconnectGui: async () => ({ content: [] }) };
+  const read = async (name: string, args: unknown = {}) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
+
+  assert.match(await read("list_servers"), /Notes: none yet/);
+  await read("update_server_notes", { server: "web", notes: "Sites in /var/www" });
+  await read("update_server_notes", { server: "web", notes: "Apps run with PM2" });
+  assert.equal(servers.get("web").notes, "Sites in /var/www\nApps run with PM2");
+  assert.equal(servers.get("web").notesUpdatedBy, "agent");
+  assert.match(await read("list_servers"), /last updated by an agent[\s\S]*Sites in \/var\/www\n {4}Apps run with PM2/);
+
+  const seen = servers.get("web").notesUpdatedAt;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await read("update_server_notes", { server: "web", notes: "Only this", mode: "replace" });
+  assert.throws(() => servers.setNotes("web", "user text", "user", seen), /modifiées par l'agent/);
+  assert.equal(servers.setNotes("web", "user text", "user", servers.get("web").notesUpdatedAt).notes, "user text");
 });
 
 test("request store lists the latest requests of a server in creation order", () => {

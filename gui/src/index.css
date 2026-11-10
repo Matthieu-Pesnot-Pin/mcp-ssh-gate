@@ -652,6 +652,108 @@ p {
   color: var(--muted);
 }
 
+/* --- Onglets et notes ----------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 100px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.tab:hover:not(.active) {
+  color: var(--text-soft);
+}
+
+.tab.active {
+  background: var(--surface-current);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tab-badge {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.notes-card {
+  padding: 22px 24px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.notes-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.notes-head > svg {
+  color: var(--accent-soft);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.notes-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.notes-edit {
+  margin-left: auto;
+  height: 36px;
+  font-size: 13px;
+}
+
+.notes-divider {
+  height: 1px;
+  background: var(--divider);
+}
+
+.notes-body {
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notes-empty {
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.notes-field {
+  min-height: 240px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 24px;
+  border-color: var(--accent);
+  resize: none;
+}
+
 /* --- Boutons et champs ---------------------------------------------------- */
 
 .btn {
