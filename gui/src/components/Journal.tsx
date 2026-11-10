@@ -49,7 +49,7 @@ function CommandEntry({ request, command, defaultOpen }: { request: GateRequest;
       </button>
       {command.original !== null && <div className="entry-note">Modifiée par toi — l'agent proposait : {command.original}</div>}
       {open && (
-        <div className="terminal">
+        <div className="output-box">
           {command.outputTruncated && <div className="muted">[début de la sortie écarté]</div>}
           {command.output.trim() ? command.output.replace(/\s+$/, '') : <span className="muted">(aucune sortie)</span>}
         </div>

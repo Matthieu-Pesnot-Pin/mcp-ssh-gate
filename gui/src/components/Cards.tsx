@@ -242,7 +242,7 @@ export function RunCard({ request, onError }: RunCardProps) {
       {shown && (
         <div>
           <div className="field-label">{total > 1 ? `Sortie de la commande ${shownIndex + 1}` : <span className="mono">{shown.command}</span>}</div>
-          <div className="terminal flush" ref={outputRef} style={{ minHeight: 120 }}>
+          <div className="output-box flush" ref={outputRef} style={{ minHeight: 120 }}>
             {shown.output}
             {shown.status === 'running' && <span className="cursor" />}
           </div>

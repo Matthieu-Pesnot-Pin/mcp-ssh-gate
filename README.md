@@ -207,6 +207,15 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 
 L'interface se met à jour par rafraîchissement périodique.
 
+## Terminaux
+
+L'entrée **Terminaux** de la barre latérale ouvre de vrais terminaux interactifs sur tes serveurs, un par onglet, plusieurs par serveur si besoin : `vim`, `htop`, `sudo` avec mot de passe et les couleurs fonctionnent. **Nouveau terminal** propose les serveurs dont la connexion a été testée.
+
+- Chaque terminal a sa propre connexion SSH, avec la clé et l'empreinte du serveur, distincte du shell des demandes de l'agent.
+- La session reste ouverte si tu fermes la page : en revenant, la fin de la sortie est réaffichée. Elle se termine avec **Fermer la session**, la croix de l'onglet, ou quand le shell distant s'arrête. Un arrêt du worker ferme tous les terminaux.
+- **L'agent n'y a pas accès** : rien de ce qui s'y passe n'apparaît dans le journal ni dans les notifications.
+- Le flux passe par une WebSocket (`/api/terminals/<id>/stream`), dont l'adresse est relative au chemin de la page. Le gateway manager la relaie vers le worker ; une poignée de main venant d'un autre site est refusée.
+
 ## Architecture
 
 - Chaque session d'agent lance son processus MCP ; **un seul worker** sert l'interface et exécute les commandes pour toutes. Il écrit un battement dans `DATA_DIR/gui.json` ; un processus MCP qui ne le voit plus en démarre un autre.

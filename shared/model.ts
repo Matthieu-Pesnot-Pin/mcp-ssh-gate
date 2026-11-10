@@ -94,4 +94,30 @@ export interface TestConnectionResponse {
   cwd: string;
 }
 
+export type TerminalStatus = "open" | "closed";
+
+/** Terminal interactif ouvert par l'utilisateur ; l'agent n'y a pas accès. */
+export interface TerminalView {
+  id: string;
+  serverId: string;
+  serverName: string;
+  /** Rang parmi les terminaux ouverts sur le même serveur, à partir de 1. */
+  number: number;
+  openedAt: string;
+  cols: number;
+  rows: number;
+  status: TerminalStatus;
+  closedReason: string | null;
+}
+
+export interface TerminalsResponse {
+  terminals: TerminalView[];
+}
+
+/** Messages du worker vers le navigateur, sur la WebSocket d'un terminal. */
+export type TerminalServerMessage = { type: "output"; data: string } | { type: "closed"; reason: string };
+
+/** Messages du navigateur vers le worker. */
+export type TerminalClientMessage = { type: "input"; data: string } | { type: "resize"; cols: number; rows: number };
+
 export const MAX_COMMANDS_PER_REQUEST = 20;

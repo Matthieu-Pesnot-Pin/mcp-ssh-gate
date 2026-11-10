@@ -4,9 +4,20 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
-import { GUI_LISTEN_HOST, ProxyClient, createLogger, honoGuiGuard, setupLogging } from "@imenam/mcp-gui-interface";
+import type { IncomingMessage, Server as HttpServer } from "node:http";
+import type { Duplex } from "node:stream";
+import { WebSocketServer, type WebSocket } from "ws";
+import {
+  GUI_LISTEN_HOST,
+  ProxyClient,
+  checkGuiRequest,
+  createLogger,
+  honoGuiGuard,
+  setupLogging,
+  trustedOriginHostnames,
+} from "@imenam/mcp-gui-interface";
 
-import type { RequestsResponse, StateResponse } from "../shared/model.js";
+import type { RequestsResponse, StateResponse, TerminalClientMessage, TerminalsResponse } from "../shared/model.js";
 import { APP_VERSION } from "./version.js";
 import { findProjectRoot, loadConfig } from "./core/config.js";
 import { GateError } from "./core/errors.js";
@@ -14,6 +25,7 @@ import { Executor } from "./core/executor.js";
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore, type ServerInput } from "./core/server-store.js";
+import { TerminalManager } from "./core/terminals.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = findProjectRoot(__dirname);
@@ -38,6 +50,7 @@ process.on("unhandledRejection", (reason) => {
 const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
 const executor = new Executor(servers, requests, (message) => logger.info(message));
+const terminals = new TerminalManager(servers, (message) => logger.info(message));
 
 // Le worker s'arrête avec le processus MCP qui l'a lancé : canal IPC fermé, ou PID parent disparu.
 const parentPid = process.ppid;
@@ -130,7 +143,9 @@ app.put("/api/servers/:id", handle(async (c) => executor.updateServer(c.req.para
 app.delete(
   "/api/servers/:id",
   handle((c) => {
-    executor.deleteServer(c.req.param("id")!);
+    const server = servers.get(c.req.param("id")!);
+    terminals.closeForServer(server.id);
+    executor.deleteServer(server.id);
     return { deleted: true };
   })
 );
@@ -167,6 +182,22 @@ app.post(
   })
 );
 
+app.get("/api/terminals", handle((): TerminalsResponse => ({ terminals: terminals.list() })));
+app.post(
+  "/api/terminals",
+  handle(async (c) => {
+    const body = await readBody(c);
+    return terminals.open(String(body?.serverId ?? ""), body?.cols, body?.rows);
+  })
+);
+app.delete(
+  "/api/terminals/:id",
+  handle((c) => {
+    terminals.close(c.req.param("id")!);
+    return { closed: true };
+  })
+);
+
 app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), staticRoot) }));
 
 function baseHref(appPath: string): string {
@@ -184,6 +215,70 @@ app.get("/*", (c, next) => {
   return c.html(fs.readFileSync(indexPath, "utf8").replace("<head>", `<head>\n    <base href="${href}" />`));
 });
 
+// --- Flux des terminaux (WebSocket) ----------------------------------------------
+
+const TERMINAL_STREAM = /^\/api\/terminals\/([\w-]+)\/stream$/;
+const terminalSockets = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
+const trustedOrigins = trustedOriginHostnames();
+
+function singleHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function refuseUpgrade(socket: Duplex, status: number, reason: string): void {
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+
+/**
+ * Seule la WebSocket d'un terminal est acceptée. Une poignée de main est traitée
+ * comme une modification : une page d'un autre site ne peut pas piloter un terminal.
+ */
+function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+  const match = TERMINAL_STREAM.exec(new URL(req.url ?? "/", "http://localhost").pathname);
+  if (!match) return refuseUpgrade(socket, 404, "Not Found");
+  const rejection = checkGuiRequest(
+    {
+      method: "WEBSOCKET",
+      host: singleHeader(req.headers.host),
+      origin: singleHeader(req.headers.origin),
+      secFetchSite: singleHeader(req.headers["sec-fetch-site"]),
+    },
+    trustedOrigins
+  );
+  if (rejection) {
+    logger.warn(`Terminal stream refused: ${rejection.error}`);
+    return refuseUpgrade(socket, 403, "Forbidden");
+  }
+  terminalSockets.handleUpgrade(req, socket, head, (ws) => bindTerminal(ws, match[1]));
+}
+
+function bindTerminal(ws: WebSocket, id: string): void {
+  let detach: () => void;
+  try {
+    detach = terminals.attach(id, (message) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+    });
+  } catch (err: any) {
+    ws.close(4404, err.message);
+    return;
+  }
+  ws.on("message", (raw) => {
+    let message: TerminalClientMessage;
+    try {
+      message = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    try {
+      if (message.type === "input") terminals.write(id, message.data);
+      else if (message.type === "resize") terminals.resize(id, message.cols, message.rows);
+    } catch (err: any) {
+      ws.close(4404, err.message);
+    }
+  });
+  ws.on("close", () => detach());
+}
+
 // --- Démarrage -----------------------------------------------------------------
 
 function listen(port: number, publicUrl: string) {
@@ -194,6 +289,8 @@ function listen(port: number, publicUrl: string) {
     setInterval(() => writeHeartbeat(config.dataDir, publicUrl), HEARTBEAT_INTERVAL_MS);
     safeSend({ type: "READY", data: { port: info.port, url: publicUrl } });
   });
+
+  (instance as HttpServer).on("upgrade", handleUpgrade);
 
   instance.on("error", (err: any) => {
     if (err.code === "EADDRINUSE") {

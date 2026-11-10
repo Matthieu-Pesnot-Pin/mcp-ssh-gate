@@ -1,10 +1,13 @@
-import { Plus, Terminal } from 'lucide-react'
+import { Plus, SquareTerminal, Terminal } from 'lucide-react'
 import type { ServerView } from '@shared/model'
 
 interface Props {
   servers: ServerView[]
   selectedId: string | null
+  terminalsOpen: boolean
+  terminalCount: number
   onSelect: (id: string) => void
+  onOpenTerminals: () => void
   onAdd: () => void
 }
 
@@ -14,19 +17,24 @@ function subtitle(server: ServerView): string {
   return `${server.username}@${server.host}`
 }
 
-export function Sidebar({ servers, selectedId, onSelect, onAdd }: Props) {
+export function Sidebar({ servers, selectedId, terminalsOpen, terminalCount, onSelect, onOpenTerminals, onAdd }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
         <Terminal size={22} />
         SSH Gate
       </div>
+      <button className={`nav-row${terminalsOpen ? ' selected' : ''}`} onClick={onOpenTerminals}>
+        <SquareTerminal size={20} />
+        <span>Terminaux</span>
+        {terminalCount > 0 ? <span className="nav-count">{terminalCount}</span> : <span />}
+      </button>
       <div className="side-label">SERVEURS</div>
       <div className="server-list">
         {servers.map((server) => (
           <button
             key={server.id}
-            className={`server-row${server.id === selectedId ? ' selected' : ''}`}
+            className={`server-row${!terminalsOpen && server.id === selectedId ? ' selected' : ''}`}
             onClick={() => onSelect(server.id)}
           >
             <span className={`dot${server.session === 'connected' ? ' on' : ''}`} />

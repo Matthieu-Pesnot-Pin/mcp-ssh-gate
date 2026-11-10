@@ -5,9 +5,12 @@ import { api } from './api'
 import { usePolling } from './usePolling'
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
+import { TerminalsScreen } from './components/TerminalsScreen'
 import { ConfirmDeleteModal, EditServerModal, ServerModal } from './components/Modals'
 
 type Dialog = { kind: 'add' } | { kind: 'key'; server: ServerView } | { kind: 'edit'; server: ServerView } | { kind: 'delete'; server: ServerView } | null
+
+const TERMINALS_HASH = '#terminaux'
 
 function selectedFromHash(): string | null {
   const match = /^#\/([^/]+)$/.exec(window.location.hash)
@@ -16,12 +19,17 @@ function selectedFromHash(): string | null {
 
 export default function App() {
   const state = usePolling('state', api.state, 2000)
+  const terminals = usePolling('terminals', api.terminals, 2500)
   const [selectedId, setSelectedId] = useState<string | null>(selectedFromHash)
+  const [terminalsOpen, setTerminalsOpen] = useState(window.location.hash === TERMINALS_HASH)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
-    const onHash = () => setSelectedId(selectedFromHash())
+    const onHash = () => {
+      setSelectedId(selectedFromHash())
+      setTerminalsOpen(window.location.hash === TERMINALS_HASH)
+    }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
@@ -33,6 +41,7 @@ export default function App() {
   }, [notice])
 
   const servers = state.data?.servers ?? []
+  const terminalList = terminals.data?.terminals ?? []
   const firstPending = servers.find((s) => s.pendingCount > 0)
   const selected = servers.find((s) => s.id === selectedId) ?? firstPending ?? servers[0] ?? null
 
@@ -47,9 +56,19 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar servers={servers} selectedId={selected?.id ?? null} onSelect={select} onAdd={() => setDialog({ kind: 'add' })} />
+      <Sidebar
+        servers={servers}
+        selectedId={selected?.id ?? null}
+        terminalsOpen={terminalsOpen}
+        terminalCount={terminalList.length}
+        onSelect={select}
+        onOpenTerminals={() => (window.location.hash = TERMINALS_HASH)}
+        onAdd={() => setDialog({ kind: 'add' })}
+      />
 
-      {selected ? (
+      {terminalsOpen ? (
+        <TerminalsScreen servers={servers} terminals={terminalList} onChanged={terminals.reload} onError={setNotice} />
+      ) : selected ? (
         <ServerScreen
           key={selected.id}
           server={selected}

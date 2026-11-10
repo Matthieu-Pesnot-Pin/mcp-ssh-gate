@@ -97,6 +97,53 @@ interface RunningCommand {
  * Connexion SSH et shell bash persistant, sans terminal : les commandes
  * s'enchaînent dans le même shell, une à la fois.
  */
+/**
+ * Ouvre une connexion SSH authentifiée. Avec une empreinte attendue, une clé
+ * d'hôte différente la fait échouer ; l'empreinte vue est renvoyée.
+ */
+export function connectSsh(target: ShellTarget): Promise<{ client: Client; fingerprint: string }> {
+  return new Promise((resolve, reject) => {
+    const client = new ssh2.Client();
+    let seenFingerprint: string | null = null;
+    let settled = false;
+
+    const fail = (message: string) => {
+      if (settled) return;
+      settled = true;
+      client.end();
+      reject(new GateError(message));
+    };
+
+    client.on("ready", () => {
+      if (settled) return;
+      settled = true;
+      resolve({ client, fingerprint: seenFingerprint! });
+    });
+
+    client.on("error", (err: any) => {
+      if (target.expectedFingerprint && seenFingerprint && seenFingerprint !== target.expectedFingerprint) {
+        return fail(
+          `La clé d'hôte de ${target.host} a changé (${seenFingerprint}, attendue ${target.expectedFingerprint}). Connexion refusée : vérifie le serveur, puis modifie-le dans l'interface pour enregistrer la nouvelle empreinte.`
+        );
+      }
+      fail(connectionErrorMessage(err, target));
+    });
+
+    client.connect({
+      host: target.host,
+      port: target.port,
+      username: target.username,
+      privateKey: target.privateKey,
+      readyTimeout: CONNECT_TIMEOUT_MS,
+      keepaliveInterval: 30_000,
+      hostVerifier: (key: Buffer) => {
+        seenFingerprint = fingerprintOf(key);
+        return target.expectedFingerprint === null || seenFingerprint === target.expectedFingerprint;
+      },
+    });
+  });
+}
+
 export class ShellSession {
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly stderrDecoder = new StringDecoder("utf8");
@@ -122,69 +169,44 @@ export class ShellSession {
    * Ouvre la connexion et le shell. Avec une empreinte attendue, une clé d'hôte
    * différente fait échouer la connexion ; sans, l'empreinte vue est renvoyée.
    */
-  static open(target: ShellTarget, onClose: (reason: string) => void): Promise<ShellSession> {
+  static async open(target: ShellTarget, onClose: (reason: string) => void): Promise<ShellSession> {
+    const { client, fingerprint } = await connectSsh(target);
     return new Promise((resolve, reject) => {
-      const client = new ssh2.Client();
-      let seenFingerprint: string | null = null;
       let settled = false;
-
       const fail = (message: string) => {
         if (settled) return;
         settled = true;
         client.end();
         reject(new GateError(message));
       };
+      client.on("error", (err) => fail(`Connexion SSH perdue : ${err.message}`));
 
-      client.on("ready", () => {
-        client.exec("bash -l", (err, channel) => {
-          if (err) return fail(`Impossible d'ouvrir un shell sur ${target.host} : ${err.message}`);
+      client.exec("bash -l", (err, channel) => {
+        if (err) return fail(`Impossible d'ouvrir un shell sur ${target.host} : ${err.message}`);
 
-          const decoder = new StringDecoder("utf8");
-          let buffer = "";
-          const timer = setTimeout(
-            () => fail(`Le shell de ${target.host} n'a pas répondu dans les ${CONNECT_TIMEOUT_MS / 1000} s : bash est-il installé ?`),
-            CONNECT_TIMEOUT_MS
-          );
+        const decoder = new StringDecoder("utf8");
+        let buffer = "";
+        const timer = setTimeout(
+          () => fail(`Le shell de ${target.host} n'a pas répondu dans les ${CONNECT_TIMEOUT_MS / 1000} s : bash est-il installé ?`),
+          CONNECT_TIMEOUT_MS
+        );
 
-          const onData = (chunk: Buffer) => {
-            buffer += decoder.write(chunk);
-            const match = READY_MARKER.exec(buffer);
-            if (!match || settled) return;
-            clearTimeout(timer);
-            channel.off("data", onData);
-            settled = true;
-            resolve(new ShellSession(client, channel, Number(match[1]), match[2], seenFingerprint!, onClose));
-          };
+        const onData = (chunk: Buffer) => {
+          buffer += decoder.write(chunk);
+          const match = READY_MARKER.exec(buffer);
+          if (!match || settled) return;
+          clearTimeout(timer);
+          channel.off("data", onData);
+          settled = true;
+          resolve(new ShellSession(client, channel, Number(match[1]), match[2], fingerprint, onClose));
+        };
 
-          channel.on("data", onData);
-          channel.on("close", () => {
-            clearTimeout(timer);
-            fail(`Le shell de ${target.host} s'est fermé au démarrage.`);
-          });
-          channel.write(`printf '__SSHGATE_READY_%s_%s__\\n' "$$" "$PWD"\n`);
+        channel.on("data", onData);
+        channel.on("close", () => {
+          clearTimeout(timer);
+          fail(`Le shell de ${target.host} s'est fermé au démarrage.`);
         });
-      });
-
-      client.on("error", (err: any) => {
-        if (target.expectedFingerprint && seenFingerprint && seenFingerprint !== target.expectedFingerprint) {
-          return fail(
-            `La clé d'hôte de ${target.host} a changé (${seenFingerprint}, attendue ${target.expectedFingerprint}). Connexion refusée : vérifie le serveur, puis modifie-le dans l'interface pour enregistrer la nouvelle empreinte.`
-          );
-        }
-        fail(connectionErrorMessage(err, target));
-      });
-
-      client.connect({
-        host: target.host,
-        port: target.port,
-        username: target.username,
-        privateKey: target.privateKey,
-        readyTimeout: CONNECT_TIMEOUT_MS,
-        keepaliveInterval: 30_000,
-        hostVerifier: (key: Buffer) => {
-          seenFingerprint = fingerprintOf(key);
-          return target.expectedFingerprint === null || seenFingerprint === target.expectedFingerprint;
-        },
+        channel.write(`printf '__SSHGATE_READY_%s_%s__\\n' "$$" "$PWD"\n`);
       });
     });
   }
