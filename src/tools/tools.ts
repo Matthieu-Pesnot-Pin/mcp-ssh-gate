@@ -4,6 +4,7 @@ import { MAX_COMMANDS_PER_REQUEST, isFinalStatus } from "../../shared/model.js";
 import { GateError } from "../core/errors.js";
 import type { RequestStore } from "../core/request-store.js";
 import type { ServerStore, StoredServer } from "../core/server-store.js";
+import { MONITOR_TIMEOUT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, type FinishedRequestScanner } from "../core/watch.js";
 import { formatRequest } from "./format.js";
 
 export interface ToolContext {
@@ -14,7 +15,20 @@ export interface ToolContext {
   /** URL de l'interface servie par le worker vivant. */
   guiUrl: () => string | null;
   reconnectGui: () => Promise<CallToolResult>;
+  /** Session d'agent de ce processus MCP, enregistrée sur les demandes qu'il soumet. */
+  sessionId: string;
+  dataDir: string;
+  /** Commande que l'outil Monitor de l'hôte lance pour surveiller cette session. */
+  watchCommand: string;
+  /** Demandes terminées de cette session, lues par l'outil d'attente du veilleur du gateway. */
+  finished: FinishedRequestScanner;
 }
+
+export const WATCH_ARG = "_gateway_watch";
+const WATCH_META = "gateway/watch";
+const EVENTS_META = "gateway/events";
+const DEFAULT_NOTIFICATION_WAIT_SECONDS = 50;
+const MAX_NOTIFICATION_WAIT_SECONDS = 300;
 
 const RESULT_OUTPUT_PER_COMMAND = 20_000;
 const HISTORY_OUTPUT_PER_COMMAND = 2_000;
@@ -24,6 +38,41 @@ const POLL_MS = 1000;
 const GUI_CHECK_EVERY_MS = 10_000;
 
 export const TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: "enable_notifications",
+    description:
+      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), without blocking on wait_for_result. " +
+      "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
+      "Call it once at the start of the session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        [WATCH_ARG]: {
+          type: "object",
+          description: "Filled in by the mcp-http-gateway relay, never by the agent: the relay will run the watcher and needs a watch specification instead of a local command",
+        },
+      },
+    },
+  },
+  {
+    name: "wait_for_notifications",
+    description:
+      "Reserved for the notification watcher that the mcp-http-gateway relay runs on the agent's machine: do not call it yourself. " +
+      "To be notified, call enable_notifications; to read the outcome of a request, call wait_for_result. " +
+      "Blocks until a request submitted by this session is finished after the cursor, or until the timeout, and returns one line per finished request with the next cursor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cursor: { type: "string", pattern: "^[0-9]+$", description: "Cursor returned by the previous call. Omit to wait for requests finished from now on." },
+        timeout_seconds: {
+          type: "integer",
+          minimum: 1,
+          maximum: MAX_NOTIFICATION_WAIT_SECONDS,
+          description: `Maximum wait in seconds (default ${DEFAULT_NOTIFICATION_WAIT_SECONDS}).`,
+        },
+      },
+    },
+  },
   {
     name: "list_servers",
     description:
@@ -52,7 +101,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       `Submit shell commands to run on a server. Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
       `Approved commands run in order in a persistent bash shell (cd and export carry over between commands and between requests), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
-      `Execution stops at the first command that exits non-zero. Returns a request_id: call wait_for_result with it. ` +
+      `Execution stops at the first command that exits non-zero. Returns a request_id: call wait_for_result with it, or, with notifications enabled, keep working and read the result when you are notified. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
     inputSchema: {
       type: "object",
@@ -131,6 +180,11 @@ const NotesArgs = z.object({
   notes: z.string(),
   mode: z.enum(["append", "replace"]).optional(),
 });
+const EnableArgs = z.object({ [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
+const NotificationWaitArgs = z.object({
+  cursor: z.string().regex(/^[0-9]+$/).optional(),
+  timeout_seconds: z.number().int().min(1).max(MAX_NOTIFICATION_WAIT_SECONDS).optional(),
+});
 const HistoryArgs = z.object({
   server: z.string().min(1),
   limit: z.number().int().min(1).max(50).optional(),
@@ -154,16 +208,6 @@ function serverOrNull(ctx: ToolContext, id: string): StoredServer | null {
   } catch {
     return null;
   }
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
 }
 
 function listServers(ctx: ToolContext): CallToolResult {
@@ -198,12 +242,67 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
   if (!server.hostKeyFingerprint) {
     throw new GateError(`The connection to "${server.id}" has never been tested. Ask the user to run "Tester la connexion" for this server in the GUI first.`);
   }
-  const request = ctx.requests.create({ serverId: server.id, source: "agent", explanation, commands });
+  const request = ctx.requests.create({ serverId: server.id, source: "agent", sessionId: ctx.sessionId, explanation, commands });
   ctx.ensureGui();
   const url = ctx.guiUrl();
+  const next =
+    `If your notification watcher is armed, keep working: you will be notified when it is finished. ` +
+    `Otherwise call wait_for_result with request_id "${request.id}".`;
   return text(
-    `Request ${request.id} submitted to ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n` +
-      `Call wait_for_result with request_id "${request.id}".`
+    `Request ${request.id} submitted to ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
+  );
+}
+
+/**
+ * Derrière mcp-http-gateway, le relais remplit `_gateway_watch` : il fera tourner le
+ * veilleur sur la machine de l'agent et a besoin d'une spécification de veille. Sinon,
+ * la réponse donne la commande du veilleur local.
+ */
+function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
+  const input = parse(EnableArgs, args);
+  if (input[WATCH_ARG]) {
+    return {
+      content: [{ type: "text", text: "Watch specification for the mcp-http-gateway relay." }],
+      _meta: {
+        [WATCH_META]: {
+          tool: "wait_for_notifications",
+          arguments: {},
+          cursor: String(Date.now()),
+          description: "Finished ssh-gate requests",
+        },
+      },
+    };
+  }
+
+  writeHandoff(ctx.sessionId, ctx.dataDir);
+  const since = liveWatcherSince(ctx.dataDir, ctx.sessionId);
+  if (since) {
+    return text(
+      [
+        `Notifications are already live for this session (watcher armed since ${since}).`,
+        "Nothing to do: do not arm a second watcher, you would get every notification twice.",
+        "Only if the host just told you your watcher expired or stopped, re-arm it with the same Monitor call:",
+        `command \`${ctx.watchCommand}\`, timeout_ms ${MONITOR_TIMEOUT_MS}.`,
+      ].join("\n")
+    );
+  }
+  return text(
+    [
+      "Notifications enabled for this session.",
+      "",
+      "Last step — call the Monitor tool now, with exactly these arguments:",
+      `  command:     ${ctx.watchCommand}`,
+      "  description: Finished ssh-gate requests",
+      `  timeout_ms:  ${MONITOR_TIMEOUT_MS}`,
+      "",
+      "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request you submitted",
+      "announces itself when its commands have all run, or when the user refused or interrupted it — one line per",
+      "request. Read the outcome with wait_for_result, which then returns immediately.",
+      "",
+      "The host stops every monitor after 30 minutes at most. Each time it tells you this watcher expired, call",
+      "Monitor again right away with the same arguments — do not call enable_notifications again. A request that",
+      "finished while no watcher was running is announced as soon as the watcher is back.",
+    ].join("\n")
   );
 }
 
@@ -224,6 +323,26 @@ async function waitForResult(ctx: ToolContext, args: unknown, signal?: AbortSign
     if (Date.now() >= deadline || signal?.aborted) {
       const state = request.status === "pending" ? "still waiting for the user's approval" : "still running";
       return text(`Request ${request.id} is ${state}. Call wait_for_result again to keep waiting.`);
+    }
+    await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())), signal);
+  }
+}
+
+/** Outil d'attente du veilleur du gateway : une ligne par demande terminée après le curseur. */
+async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
+  const { cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
+  let cursor = rawCursor === undefined ? Date.now() : Number(rawCursor);
+  const deadline = Date.now() + (timeout_seconds ?? DEFAULT_NOTIFICATION_WAIT_SECONDS) * 1000;
+
+  for (;;) {
+    const finished = ctx.finished.since(cursor);
+    if (finished.length > 0 || Date.now() >= deadline || signal?.aborted) {
+      cursor = advanceCursor(cursor, finished);
+      const lines = finished.map(formatEvent);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ received: lines.length, cursor: String(cursor), lines }) }],
+        _meta: { [EVENTS_META]: { cursor: String(cursor), lines } },
+      };
     }
     await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())), signal);
   }
@@ -253,6 +372,10 @@ function getHistory(ctx: ToolContext, args: unknown): CallToolResult {
 export async function callTool(ctx: ToolContext, name: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     switch (name) {
+      case "enable_notifications":
+        return enableNotifications(ctx, args);
+      case "wait_for_notifications":
+        return await waitForNotifications(ctx, args, signal);
       case "list_servers":
         return listServers(ctx);
       case "update_server_notes":

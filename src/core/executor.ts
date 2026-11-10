@@ -162,7 +162,7 @@ export class Executor {
   runManual(serverId: string, command: unknown): GateRequest {
     const server = this.servers.get(serverId);
     this.assertIdle(server.id);
-    const created = this.requests.create({ serverId: server.id, source: "user", explanation: "", commands: [String(command ?? "")] });
+    const created = this.requests.create({ serverId: server.id, source: "user", sessionId: null, explanation: "", commands: [String(command ?? "")] });
     const updated = this.requests.update(created.id, (draft) => {
       draft.status = "running";
       draft.decidedAt = now();

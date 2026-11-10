@@ -14,6 +14,7 @@ import { liveGuiUrl } from "./core/heartbeat.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore } from "./core/server-store.js";
 import { generateVaultKey } from "./core/vault.js";
+import { FinishedRequestScanner, newSessionId, removeOwnHandoffs, runWatchMode } from "./core/watch.js";
 import { TOOL_DEFINITIONS, callTool, type ToolContext } from "./tools/tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,17 @@ const argv = process.argv.slice(2);
 if (argv.includes("--generate-vault-key")) {
   console.log(generateVaultKey());
   process.exit(0);
+}
+
+const watchIndex = argv.indexOf("--watch");
+if (watchIndex !== -1) {
+  const session = argv[watchIndex + 1];
+  try {
+    await runWatchMode(session && !session.startsWith("-") ? session : null);
+  } catch (err: any) {
+    process.stderr.write(`[ssh-gate] ${err.message}\n`);
+    process.exit(1);
+  }
 }
 
 if (argv.includes("--claude-setup-mcp")) {
@@ -138,7 +150,20 @@ async function reconnectGui(): Promise<CallToolResult> {
 
 // --- Serveur MCP ---------------------------------------------------------------
 
-const toolContext: ToolContext = { servers, requests, ensureGui, guiUrl, reconnectGui };
+const sessionId = newSessionId();
+const entryScript = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+const toolContext: ToolContext = {
+  servers,
+  requests,
+  ensureGui,
+  guiUrl,
+  reconnectGui,
+  sessionId,
+  dataDir: config.dataDir,
+  watchCommand: `node "${entryScript}" --watch ${sessionId}`,
+  finished: new FinishedRequestScanner(requests, sessionId),
+};
+process.on("exit", removeOwnHandoffs);
 
 const server = new Server({ name: "mcp-ssh-gate", version: APP_VERSION }, { capabilities: { tools: {} } });
 

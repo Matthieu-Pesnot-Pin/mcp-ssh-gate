@@ -36,13 +36,82 @@ npx -y @imenam/mcp-ssh-gate --claude-setup-mcp --proxy_url=http://localhost:3000
 npx -y @imenam/mcp-ssh-gate --claude-setup-mcp --app_port=4600
 ```
 
-### Derrière le gateway manager
+Les deux flags sont exclusifs : la commande échoue si les deux sont passés.
 
-Déclare le MCP comme les autres, et ajoute `VAULT_KEY` en cochant **secret** : le manager la stocke chiffrée avec sa clé maître et la réinjecte au lancement. Une clé se génère avec :
+Exemple d'entrée générée :
+
+```json
+{
+  "mcpServers": {
+    "ssh-gate": {
+      "command": "npx",
+      "args": ["-y", "@imenam/mcp-ssh-gate"],
+      "env": {
+        "PROXY_URL": "http://localhost:3000",
+        "APP_PORT": "",
+        "APP_GROUP": "Mon-projet",
+        "APP_NAME": "SSH Gate",
+        "APP_PATH": "/ssh-gate",
+        "DATA_DIR": "C:/dev/mon-projet/.ssh-gate-data",
+        "VAULT_KEY": "<32 octets en base64, générés par la commande>",
+        "MCP_LOG_DIR": ""
+      }
+    }
+  }
+}
+```
+
+Une `VAULT_KEY` se génère aussi à part :
 
 ```bash
 npx -y @imenam/mcp-ssh-gate --generate-vault-key
 ```
+
+### Dans le gateway manager
+
+Ajoute le MCP à une gateway avec ces variables, et coche **secret** pour `VAULT_KEY` : le manager la stocke chiffrée avec sa clé maître et la réinjecte au lancement.
+
+```json
+{
+  "mcpServers": {
+    "ssh-gate": {
+      "command": "npx",
+      "args": ["-y", "@imenam/mcp-ssh-gate"],
+      "env": {
+        "PROXY_URL": "http://localhost:3000",
+        "APP_GROUP": "SSH Gate",
+        "APP_PATH": "/ssh-gate",
+        "DATA_DIR": "/srv/ssh-gate",
+        "VAULT_KEY": { "secret": true, "value": "<clé générée par --generate-vault-key>" }
+      }
+    }
+  }
+}
+```
+
+### Dans mcp-http-gateway
+
+Le MCP se déclare dans un gateway ([mcp-http-gateway](https://www.npmjs.com/package/@imenam/mcp-http-gateway)) comme tout autre MCP, dans `config/mcp-servers.json` :
+
+```json
+{
+  "mcpServers": {
+    "ssh-gate": {
+      "command": "npx",
+      "args": ["-y", "@imenam/mcp-ssh-gate"],
+      "env": {
+        "MCP_SERVER_ROUTE": "/ssh-gate",
+        "PROXY_URL": "http://localhost:3000",
+        "APP_PATH": "/ssh-gate",
+        "DATA_DIR": "/srv/ssh-gate",
+        "VAULT_KEY": "<clé générée par --generate-vault-key>"
+      }
+    }
+  }
+}
+```
+
+Les connexions SSH partent de la machine du gateway : c'est elle qui doit joindre les serveurs. Les notifications fonctionnent à travers le gateway (voir [Notifications](#notifications)).
 
 ### Variables d'environnement
 
@@ -78,9 +147,35 @@ Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de co
 | `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
 | `submit_commands` | Soumet 1 à 20 commandes avec une explication. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
 | `wait_for_result` | Attend ta décision et la fin de l'exécution, puis renvoie le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Rend la main au bout de `timeout_seconds` (300 par défaut, 1800 au plus) : il suffit de le rappeler. |
+| `enable_notifications` | Active les notifications de fin de demande et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
+| `wait_for_notifications` | Réservé au veilleur du gateway, qui l'appelle en boucle ; l'agent ne l'appelle pas. |
 | `cancel_request` | Retire une demande pas encore validée. |
 | `get_history` | Dernières demandes d'un serveur, y compris les commandes que tu as tapées toi-même. |
 | `reconnect_gui` | Relance l'interface si elle ne tourne plus, et donne son URL. |
+
+## Notifications
+
+Plutôt que d'attendre avec `wait_for_result`, l'agent peut continuer à travailler et être prévenu quand une demande qu'il a soumise est terminée : toutes ses commandes ont tourné, ou tu l'as refusée ou interrompue.
+
+L'agent appelle `enable_notifications` une fois, puis lance l'appel Monitor que l'outil lui renvoie. Le veilleur ainsi armé tourne sur la machine de l'agent et écrit une ligne par demande terminée, ce qui réveille l'agent, même inactif :
+
+```
+[ssh-gate] pxp-dev — request 0mwavl7lb-419091 completed: 4/4 command(s) succeeded — read it with wait_for_result, request_id 0mwavl7lb-419091
+```
+
+L'agent lit ensuite le résultat avec `wait_for_result`, qui répond aussitôt.
+
+**En local**, `enable_notifications` dépose un relais dans `~/.mcp-ssh-gate/watch/` (le dossier de données et le point de reprise, aucun secret) et renvoie la commande `mcp-ssh-gate --watch <session>`. Ce veilleur lit directement les demandes dans `DATA_DIR` et n'annonce que celles de **sa** session.
+
+**Derrière mcp-http-gateway**, la veille suit la [convention du gateway](https://www.npmjs.com/package/@imenam/mcp-http-gateway), comme mcp-telegram :
+
+1. `enable_notifications` déclare la propriété réservée `_gateway_watch`. Le relais la remplit, et l'outil répond par une spécification de veille (`_meta["gateway/watch"]`) qui désigne l'outil d'attente `wait_for_notifications` et le point de reprise.
+2. Le relais dépose le fichier de veille sur la machine de l'agent et lui rend l'appel Monitor `npx -y @imenam/mcp-http-gateway --watch <fichier>`.
+3. Ce veilleur appelle en boucle `wait_for_notifications` à travers le gateway. Chaque appel attend au plus 50 s une demande terminée, et renvoie les lignes et le nouveau point de reprise dans `_meta["gateway/events"]`.
+
+`wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway : le veilleur de chacun annonce les demandes soumises par tous.
+
+Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les commandes que tu tapes toi-même et les demandes que l'agent a retirées ne sont pas annoncées.
 
 ## Notes du serveur
 
@@ -111,6 +206,7 @@ L'interface se met à jour par rafraîchissement périodique.
 ## Architecture
 
 - Chaque session d'agent lance son processus MCP ; **un seul worker** sert l'interface et exécute les commandes pour toutes. Il écrit un battement dans `DATA_DIR/gui.json` ; un processus MCP qui ne le voit plus en démarre un autre.
+- Chaque processus MCP reçoit un identifiant de session, enregistré sur les demandes qu'il soumet : c'est ce qui permet au veilleur de n'annoncer que les demandes de sa session. Le veilleur local signale sa présence dans `DATA_DIR/watchers/`.
 - Les demandes sont des fichiers JSON dans `DATA_DIR/requests/<serveur>/`, écrits par renommage atomique et modifiés sous verrou de fichier.
 - Les sessions SSH vivent dans le worker. S'il s'arrête pendant une exécution, la demande est marquée en échec au démarrage suivant : le résultat des commandes en cours est inconnu.
 

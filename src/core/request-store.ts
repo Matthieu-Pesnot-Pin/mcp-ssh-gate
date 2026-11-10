@@ -8,6 +8,7 @@ import { readJson, withFileLock, writeJsonAtomic } from "./files.js";
 export interface NewRequest {
   serverId: string;
   source: RequestSource;
+  sessionId: string | null;
   explanation: string;
   commands: string[];
 }
@@ -50,6 +51,7 @@ export class RequestStore {
       id: newId(),
       serverId: input.serverId,
       source: input.source,
+      sessionId: input.sessionId,
       explanation: String(input.explanation ?? "").trim(),
       createdAt: new Date().toISOString(),
       status: "pending",
@@ -105,6 +107,28 @@ export class RequestStore {
       fn(draft);
       writeJsonAtomic(file, draft);
       return draft;
+    });
+  }
+
+  /** Fichiers de demande de tous les serveurs, avec leur date de modification. */
+  files(): { file: string; mtimeMs: number }[] {
+    if (!fs.existsSync(this.root)) return [];
+    return fs.readdirSync(this.root).flatMap((serverId) => {
+      const dir = path.join(this.root, serverId);
+      let names: string[];
+      try {
+        names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
+      } catch {
+        return [];
+      }
+      return names.flatMap((name) => {
+        const file = path.join(dir, name);
+        try {
+          return [{ file, mtimeMs: fs.statSync(file).mtimeMs }];
+        } catch {
+          return [];
+        }
+      });
     });
   }
 

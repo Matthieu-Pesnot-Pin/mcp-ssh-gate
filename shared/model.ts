@@ -31,6 +31,8 @@ export interface GateRequest {
   id: string;
   serverId: string;
   source: RequestSource;
+  /** Session d'agent qui a soumis la demande ; null pour une commande saisie à la main. */
+  sessionId: string | null;
   /** Explication de l'agent ; vide pour une commande saisie à la main. */
   explanation: string;
   createdAt: string;

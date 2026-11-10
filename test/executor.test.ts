@@ -87,6 +87,7 @@ test("approved commands run in a persistent shell and stop at the first failure"
   const batch = requests.create({
     serverId: "local",
     source: "agent",
+    sessionId: null,
     explanation: "test",
     commands: [`cd '${workPath}'`, "export GREETING=hello", "echo \"$GREETING from $(basename \"$PWD\")\"; echo oops >&2", "read -r line; echo \"read status $?\"", "false", "echo never"],
   });
@@ -110,14 +111,14 @@ test("approved commands run in a persistent shell and stop at the first failure"
   assert.equal(manualDone.status, "completed");
   assert.equal(manualDone.commands[0].output, "hello again\n");
 
-  const broken = requests.create({ serverId: "local", source: "agent", explanation: "syntax", commands: ["echo 'unclosed", "echo after"] });
+  const broken = requests.create({ serverId: "local", source: "agent", sessionId: null, explanation: "syntax", commands: ["echo 'unclosed", "echo after"] });
   executor.approve(broken.id, null);
   const brokenDone = await waitFinal(requests, broken.id);
   assert.equal(brokenDone.status, "failed");
   assert.match(brokenDone.commands[0].output, /Erreur de syntaxe/);
   assert.equal(brokenDone.commands[1].status, "skipped");
 
-  const refused = requests.create({ serverId: "local", source: "agent", explanation: "no", commands: ["rm -rf /tmp/x"] });
+  const refused = requests.create({ serverId: "local", source: "agent", sessionId: null, explanation: "no", commands: ["rm -rf /tmp/x"] });
   assert.equal(executor.refuse(refused.id, "pas maintenant").status, "refused");
   assert.throws(() => executor.approve(refused.id, null), /plus en attente/);
 });
