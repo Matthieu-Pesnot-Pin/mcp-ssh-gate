@@ -309,7 +309,7 @@ test("the install command writes the dedicated file and only reloads sshd after 
   assert.ok(!command.includes("\n"));
   assert.match(command, /printf '%s\\n' 'restrict,pty ssh-ed25519 AAAAKEY mcp-ssh-gate@prod' > ~\/\.ssh\/authorized_keys\.d\/ssh-gate/);
   assert.match(command, /AuthorizedKeysFile \.ssh\/authorized_keys \.ssh\/authorized_keys\.d\/ssh-gate/);
-  assert.match(command, /if sudo sshd -t && sudo sshd -T .* \| grep -q 'authorized_keys\.d\/ssh-gate'; then sudo systemctl reload sshd/);
+  assert.match(command, /if sudo sshd -t && sudo sshd -T .* \| grep -q 'authorized_keys\.d\/ssh-gate'; then unit=sshd; .*ssh\.service\)" = loaded \] && unit=ssh; sudo systemctl try-reload-or-restart "\$unit\.service"/);
   assert.match(command, /else sudo rm -f \/etc\/ssh\/sshd_config\.d\/10-ssh-gate\.conf/);
   assert.equal(keyLine("ssh-ed25519 AAAAKEY c", "203.0.113.7"), 'restrict,pty,from="203.0.113.7" ssh-ed25519 AAAAKEY c');
 });

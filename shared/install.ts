@@ -22,7 +22,10 @@ export function keyLine(publicKey: string, allowedFrom: string | null = null): s
  * Commande d'installation, sur une ligne : écrit la clé dans le fichier dédié,
  * fait lire ce fichier à sshd en plus de ~/.ssh/authorized_keys, et ne recharge
  * sshd que si la configuration est valide et prend bien le fichier dédié en
- * compte ; sinon le réglage ajouté est retiré.
+ * compte ; sinon le réglage ajouté est retiré. Le service s'appelle `ssh` sur
+ * Debian et Ubuntu, `sshd` ailleurs ; `try-reload-or-restart` ne fait rien quand
+ * il est arrêté, cas de l'activation par socket où sshd lit sa configuration au
+ * démarrage.
  */
 export function installCommand(publicKey: string): string {
   const dir = "~/.ssh/authorized_keys.d";
@@ -34,7 +37,8 @@ export function installCommand(publicKey: string): string {
     `chmod 600 ${file}`,
     `printf '%s\\n' '${SSHD_SETTING}' | sudo tee ${SSHD_DROP_IN} > /dev/null`,
     `if sudo sshd -t && sudo sshd -T -C user=$(id -un),host=localhost,addr=127.0.0.1 | grep -q 'authorized_keys.d/ssh-gate'; ` +
-      `then sudo systemctl reload sshd && echo 'SSH Gate : installation terminée'; ` +
+      `then unit=sshd; [ "$(systemctl show -p LoadState --value ssh.service)" = loaded ] && unit=ssh; ` +
+      `sudo systemctl try-reload-or-restart "$unit.service" && echo 'SSH Gate : installation terminée'; ` +
       `else sudo rm -f ${SSHD_DROP_IN}; echo 'SSH Gate : sshd ne prend pas le fichier dédié en compte, réglage retiré'; fi`,
   ].join(" && ");
 }
