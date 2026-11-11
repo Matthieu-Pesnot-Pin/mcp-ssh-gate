@@ -91,6 +91,16 @@ test("request store lists the latest requests of a server in creation order", ()
   assert.equal(store.listOpen().length, 3);
   assert.throws(() => store.create({ serverId: "a", source: "agent", sessionId: null, explanation: "", commands: ["  "] }), /Command 1 is empty/);
   assert.throws(() => store.get("nope"), /Invalid request id/);
+
+  const realNow = Date.now;
+  const frozen = realNow.call(Date) + 60_000;
+  Date.now = () => frozen;
+  try {
+    const sameMillisecond = Array.from({ length: 10 }, (_, i) => store.create({ serverId: "c", source: "agent", sessionId: null, explanation: "", commands: [`echo ${i}`] }).id);
+    assert.deepEqual(store.listForServer("c").map((r) => r.id), sameMillisecond);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("formatted result shows edits, refusal reason and skipped commands", () => {

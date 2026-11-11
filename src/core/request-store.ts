@@ -15,9 +15,17 @@ export interface NewRequest {
 
 const ID_PATTERN = /^[0-9a-z]{9}-[0-9a-f]{6}$/;
 
-/** Identifiant triable par date de création : horodatage base 36 sur 9 caractères, puis 6 caractères aléatoires. */
+let lastStamp = 0;
+
+/**
+ * Identifiant triable par date de création : horodatage base 36 sur 9
+ * caractères, puis 6 caractères aléatoires. L'horodatage croît strictement
+ * dans un processus : deux demandes créées dans la même milliseconde gardent
+ * leur ordre.
+ */
 function newId(): string {
-  return `${Date.now().toString(36).padStart(9, "0")}-${randomBytes(3).toString("hex")}`;
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return `${lastStamp.toString(36).padStart(9, "0")}-${randomBytes(3).toString("hex")}`;
 }
 
 function normalizeCommands(commands: string[]): string[] {
