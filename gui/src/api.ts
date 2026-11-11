@@ -55,6 +55,7 @@ export const api = {
   share: (id: string) => send<GateRequest>('POST', `${req(id)}/share`),
   terminals: () => request<TerminalsResponse>('terminals'),
   openTerminal: (serverId: string, cols: number, rows: number) => send<TerminalView>('POST', 'terminals', { serverId, cols, rows }),
+  terminalTicket: (id: string) => send<{ ticket: string }>('POST', `terminals/${encodeURIComponent(id)}/ticket`),
   closeTerminal: (id: string) => send<{ closed: true }>('DELETE', `terminals/${encodeURIComponent(id)}`),
   interrupt: (id: string) => send<{ interrupted: true }>('POST', `${req(id)}/interrupt`),
 }
@@ -63,8 +64,8 @@ export const api = {
  * Adresse de la WebSocket d'un terminal, relative au chemin de la page et non à la
  * balise <base> : derrière le gateway manager, seul le chemin de la page est relayé.
  */
-export function terminalStreamUrl(id: string): string {
+export function terminalStreamUrl(id: string, ticket: string): string {
   const path = window.location.pathname.endsWith('/') ? window.location.pathname : `${window.location.pathname}/`
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}${path}api/terminals/${encodeURIComponent(id)}/stream`
+  return `${protocol}//${window.location.host}${path}api/terminals/${encodeURIComponent(id)}/stream?ticket=${encodeURIComponent(ticket)}`
 }

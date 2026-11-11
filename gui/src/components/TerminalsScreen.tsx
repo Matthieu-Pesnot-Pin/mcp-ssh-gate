@@ -58,30 +58,40 @@ function TerminalPane({ terminal, active }: { terminal: TerminalView; active: bo
     xtermRef.current = xterm
     fitRef.current = fit
 
-    const socket = new WebSocket(terminalStreamUrl(terminal.id))
-    socketRef.current = socket
-    const send = (message: TerminalClientMessage) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
-    }
+    let socket: WebSocket | null = null
+    let disposed = false
     let ended = false
+    const send = (message: TerminalClientMessage) => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+    }
+    const notice = (text: string) => xterm.write(`\r\n\x1b[90m[${text}]\x1b[0m\r\n`)
 
-    socket.onopen = () => {
-      if (host.offsetParent !== null) fit.fit()
-      send({ type: 'resize', cols: xterm.cols, rows: xterm.rows })
-    }
-    socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as TerminalServerMessage
-      if (message.type === 'output') {
-        xterm.write(message.data)
-      } else {
-        ended = true
-        xterm.write(`\r\n\x1b[90m[${message.reason}]\x1b[0m\r\n`)
-      }
-    }
-    socket.onclose = (event) => {
-      if (ended) return
-      xterm.write(`\r\n\x1b[90m[Liaison avec le terminal perdue${event.reason ? ` : ${event.reason}` : ''}]\x1b[0m\r\n`)
-    }
+    api
+      .terminalTicket(terminal.id)
+      .then(({ ticket }) => {
+        if (disposed) return
+        socket = new WebSocket(terminalStreamUrl(terminal.id, ticket))
+        socketRef.current = socket
+        socket.onopen = () => {
+          if (host.offsetParent !== null) fit.fit()
+          send({ type: 'resize', cols: xterm.cols, rows: xterm.rows })
+        }
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as TerminalServerMessage
+          if (message.type === 'output') {
+            xterm.write(message.data)
+          } else {
+            ended = true
+            notice(message.reason)
+          }
+        }
+        socket.onclose = (event) => {
+          if (!ended) notice(`Liaison avec le terminal perdue${event.reason ? ` : ${event.reason}` : ''}`)
+        }
+      })
+      .catch((err: Error) => {
+        if (!disposed) notice(`Liaison avec le terminal impossible : ${err.message}`)
+      })
 
     const input = xterm.onData((data) => send({ type: 'input', data }))
     const resize = xterm.onResize(({ cols, rows }) => send({ type: 'resize', cols, rows }))
@@ -94,8 +104,11 @@ function TerminalPane({ terminal, active }: { terminal: TerminalView; active: bo
       observer.disconnect()
       input.dispose()
       resize.dispose()
-      socket.onclose = null
-      socket.close()
+      disposed = true
+      if (socket) {
+        socket.onclose = null
+        socket.close()
+      }
       xterm.dispose()
     }
   }, [terminal.id])

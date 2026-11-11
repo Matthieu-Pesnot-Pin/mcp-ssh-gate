@@ -26,6 +26,7 @@ import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
 import { KeyService } from "./core/keys.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore, type ServerInput } from "./core/server-store.js";
+import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -203,6 +204,14 @@ app.post(
     return terminals.open(String(body?.serverId ?? ""), body?.cols, body?.rows);
   })
 );
+app.post(
+  "/api/terminals/:id/ticket",
+  handle((c) => {
+    const id = c.req.param("id")!;
+    if (!terminals.list().some((terminal) => terminal.id === id)) throw new GateError("Ce terminal n'existe plus.");
+    return { ticket: terminalTickets.issue(id) };
+  })
+);
 app.delete(
   "/api/terminals/:id",
   handle((c) => {
@@ -232,6 +241,7 @@ app.get("/*", (c, next) => {
 
 const TERMINAL_STREAM = /^\/api\/terminals\/([\w-]+)\/stream$/;
 const terminalSockets = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
+const terminalTickets = new TerminalTickets();
 const trustedOrigins = trustedOriginHostnames();
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -243,23 +253,24 @@ function refuseUpgrade(socket: Duplex, status: number, reason: string): void {
 }
 
 /**
- * Seule la WebSocket d'un terminal est acceptée. Une poignée de main est traitée
- * comme une modification : une page d'un autre site ne peut pas piloter un terminal.
+ * Seule la WebSocket d'un terminal est acceptée : `Host` de boucle locale, et
+ * ticket délivré par `POST /api/terminals/:id/ticket`, qu'une page d'un autre
+ * site ne peut pas obtenir.
  */
 function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-  const match = TERMINAL_STREAM.exec(new URL(req.url ?? "/", "http://localhost").pathname);
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const match = TERMINAL_STREAM.exec(url.pathname);
   if (!match) return refuseUpgrade(socket, 404, "Not Found");
   const rejection = checkGuiRequest(
-    {
-      method: "WEBSOCKET",
-      host: singleHeader(req.headers.host),
-      origin: singleHeader(req.headers.origin),
-      secFetchSite: singleHeader(req.headers["sec-fetch-site"]),
-    },
+    { method: "GET", host: singleHeader(req.headers.host), origin: singleHeader(req.headers.origin), secFetchSite: undefined },
     trustedOrigins
   );
   if (rejection) {
     logger.warn(`Terminal stream refused: ${rejection.error}`);
+    return refuseUpgrade(socket, 403, "Forbidden");
+  }
+  if (!terminalTickets.redeem(url.searchParams.get("ticket"), match[1])) {
+    logger.warn(`Terminal stream refused: missing, expired or reused ticket for ${match[1]}`);
     return refuseUpgrade(socket, 403, "Forbidden");
   }
   terminalSockets.handleUpgrade(req, socket, head, (ws) => bindTerminal(ws, match[1]));

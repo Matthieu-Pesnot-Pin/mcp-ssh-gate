@@ -12,6 +12,7 @@ import { formatRequest } from "../src/tools/format.js";
 import { runSetupMcp } from "../src/cli/setup-mcp.js";
 import { callTool } from "../src/tools/tools.js";
 import { FinishedRequestScanner } from "../src/core/watch.js";
+import { TerminalTickets } from "../src/core/terminal-tickets.js";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-test-"));
@@ -125,4 +126,21 @@ test("setup keeps an existing VAULT_KEY when forced", () => {
   } finally {
     console.log = log;
   }
+});
+
+test("a terminal ticket opens one stream of its terminal, once, before it expires", () => {
+  let now = 1_000;
+  const tickets = new TerminalTickets(() => now);
+  const ticket = tickets.issue("term_a");
+  assert.equal(tickets.redeem(ticket, "term_b"), false);
+  assert.equal(tickets.redeem(ticket, "term_a"), false);
+
+  const fresh = tickets.issue("term_a");
+  assert.equal(tickets.redeem(fresh, "term_a"), true);
+  assert.equal(tickets.redeem(fresh, "term_a"), false);
+
+  const late = tickets.issue("term_a");
+  now += 30_001;
+  assert.equal(tickets.redeem(late, "term_a"), false);
+  assert.equal(tickets.redeem(null, "term_a"), false);
 });

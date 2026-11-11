@@ -226,7 +226,7 @@ L'entrée **Terminaux** de la barre latérale ouvre de vrais terminaux interacti
 - Chaque terminal a sa propre connexion SSH, avec la clé et l'empreinte du serveur, distincte du shell des demandes de l'agent.
 - La session reste ouverte si tu fermes la page : en revenant, la fin de la sortie est réaffichée. Elle se termine avec **Fermer la session**, la croix de l'onglet, ou quand le shell distant s'arrête. Un arrêt du worker ferme tous les terminaux.
 - **L'agent n'y a pas accès** : rien de ce qui s'y passe n'apparaît dans le journal ni dans les notifications.
-- Le flux passe par une WebSocket (`/api/terminals/<id>/stream`), dont l'adresse est relative au chemin de la page. Le gateway manager la relaie vers le worker ; une poignée de main venant d'un autre site est refusée.
+- Le flux passe par une WebSocket (`/api/terminals/<id>/stream`), dont l'adresse est relative au chemin de la page. Le gateway manager la relaie vers le worker (le proxy local de proxy-setup ne relaie pas les WebSockets). Pour l'ouvrir, la page obtient d'abord un ticket à usage unique, valable 30 secondes, par `POST /api/terminals/<id>/ticket` : une page d'un autre site ne peut pas l'obtenir, et la poignée de main ne dépend pas de l'origine, que le worker ne connaît pas derrière un proxy.
 
 ## Architecture
 
