@@ -217,7 +217,12 @@ function listServers(ctx: ToolContext): CallToolResult {
     return text(`No server is configured yet. Ask the user to add one in the GUI${url ? ` (${url})` : ""}.`);
   }
   const blocks = servers.map((s) => {
-    const head = `- ${s.id} — "${s.name}" — ${s.username}@${s.host}:${s.port} — ${s.hostKeyFingerprint ? "ready" : "connection not tested yet: commands cannot be submitted"}`;
+    const state = !s.publicKey
+      ? "key revoked by the user: commands cannot be submitted"
+      : s.hostKeyFingerprint
+        ? "ready"
+        : "connection not tested yet: commands cannot be submitted";
+    const head = `- ${s.id} — "${s.name}" — ${s.username}@${s.host}:${s.port} — ${state}`;
     if (!s.notes) return `${head}\n  Notes: none yet. Record what you learn about this server with update_server_notes.`;
     const author = s.notesUpdatedBy === "user" ? "the user" : "an agent";
     const indented = s.notes.split("\n").map((line) => `    ${line}`).join("\n");
@@ -239,6 +244,9 @@ function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
 function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
   const { server: serverRef, commands, explanation } = parse(SubmitArgs, args);
   const server = ctx.servers.get(serverRef);
+  if (!server.publicKey) {
+    throw new GateError(`The user revoked the key of "${server.id}": SSH Gate has no access to it until they install a new key in the GUI.`);
+  }
   if (!server.hostKeyFingerprint) {
     throw new GateError(`The connection to "${server.id}" has never been tested. Ask the user to run "Tester la connexion" for this server in the GUI first.`);
   }

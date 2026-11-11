@@ -1347,3 +1347,219 @@ p {
   font-size: 12px;
   font-weight: 500;
 }
+
+/* --- Clé de SSH Gate ------------------------------------------------------- */
+
+.keybox {
+  overflow-wrap: anywhere;
+}
+
+.key-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.key-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.link-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-soft);
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.does-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.does-row svg {
+  flex-shrink: 0;
+  color: var(--accent-soft);
+}
+
+.callout-warn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  background: rgba(227, 163, 59, 0.08);
+  border: 1px solid rgba(227, 163, 59, 0.35);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-soft);
+}
+
+.callout-warn svg {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.check-row {
+  display: flex;
+  gap: 12px;
+}
+
+.check-row svg {
+  flex-shrink: 0;
+}
+
+.check-ok {
+  color: var(--ok);
+}
+
+.check-warn {
+  color: var(--warning);
+}
+
+.check-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.check-detail {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.key-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.key-step {
+  display: flex;
+  gap: 16px;
+}
+
+.key-step-dot {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.key-step-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.key-step-detail {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--faint);
+}
+
+.key-step.done .key-step-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--bg);
+}
+
+.key-step.failed .key-step-dot {
+  background: rgba(217, 68, 59, 0.15);
+  border-color: #d9443b;
+  color: var(--danger);
+}
+
+.key-step.failed .key-step-detail {
+  color: var(--danger);
+}
+
+.key-step.skipped {
+  opacity: 0.45;
+}
+
+.current-key {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.current-key svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.current-key-label {
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.safe-box {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  background: var(--surface-raised);
+  border-radius: 8px;
+}
+
+.safe-box svg {
+  flex-shrink: 0;
+  color: var(--ok);
+}
+
+.safe-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.safe-detail {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.btn-danger-solid {
+  background: #d9443b;
+  color: #fff;
+}
+
+.btn-danger-solid:hover:not(:disabled) {
+  background: #e5534a;
+}
+
+.keybox.clamp {
+  max-height: 106px;
+  overflow-y: auto;
+}

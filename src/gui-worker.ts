@@ -17,12 +17,13 @@ import {
   trustedOriginHostnames,
 } from "@imenam/mcp-gui-interface";
 
-import type { RequestsResponse, StateResponse, TerminalClientMessage, TerminalsResponse } from "../shared/model.js";
+import type { RequestsResponse, StateResponse, TerminalClientMessage, TerminalsResponse, TestConnectionResponse } from "../shared/model.js";
 import { APP_VERSION } from "./version.js";
 import { findProjectRoot, loadConfig } from "./core/config.js";
 import { GateError } from "./core/errors.js";
 import { Executor } from "./core/executor.js";
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
+import { KeyService } from "./core/keys.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore, type ServerInput } from "./core/server-store.js";
 import { TerminalManager } from "./core/terminals.js";
@@ -51,6 +52,7 @@ const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
 const executor = new Executor(servers, requests, (message) => logger.info(message));
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
+const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
 
 // Le worker s'arrête avec le processus MCP qui l'a lancé : canal IPC fermé, ou PID parent disparu.
 const parentPid = process.ppid;
@@ -149,7 +151,18 @@ app.delete(
     return { deleted: true };
   })
 );
-app.post("/api/servers/:id/test", handle((c) => executor.testConnection(c.req.param("id")!)));
+app.post(
+  "/api/servers/:id/test",
+  handle(async (c): Promise<TestConnectionResponse> => {
+    const tested = await executor.testConnection(c.req.param("id")!);
+    const keyFile = await keys.restrictToGate(tested.server.id);
+    return { ...tested, server: executor.view(servers.get(tested.server.id)), keyFile };
+  })
+);
+app.post("/api/servers/:id/key", handle((c) => keys.installNewKey(c.req.param("id")!)));
+app.post("/api/servers/:id/key/rotate", handle((c) => keys.rotate(c.req.param("id")!)));
+app.post("/api/servers/:id/key/revoke", handle((c) => keys.revoke(c.req.param("id")!)));
+app.post("/api/servers/:id/key/forget", handle((c) => keys.forget(c.req.param("id")!)));
 app.post(
   "/api/servers/:id/disconnect",
   handle((c) => {

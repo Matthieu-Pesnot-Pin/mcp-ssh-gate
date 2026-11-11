@@ -3,7 +3,7 @@ import { EyeOff, Plus, Power, SquareTerminal, X } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import type { ServerView, TerminalClientMessage, TerminalServerMessage, TerminalView } from '@shared/model'
+import { isReady, type ServerView, type TerminalClientMessage, type TerminalServerMessage, type TerminalView } from '@shared/model'
 import { api, terminalStreamUrl } from '../api'
 import { clock, plural } from '../format'
 
@@ -115,14 +115,14 @@ function NewTerminalMenu({ servers, terminals, onOpen }: { servers: ServerView[]
       <div className="menu-label">OUVRIR UN TERMINAL SUR</div>
       {servers.map((server) => {
         const open = terminals.filter((t) => t.serverId === server.id && t.status === 'open').length
-        const tested = !!server.hostKeyFingerprint
+        const tested = isReady(server)
         return (
           <button key={server.id} className="picker-row" disabled={!tested} onClick={() => onOpen(server)}>
             <span className={`dot${tested ? ' on' : ''}`} />
             <span style={{ minWidth: 0 }}>
               <div className="server-name">{server.name}</div>
               <div className="server-sub">
-                {tested ? `${server.username}@${server.host}${open ? ` · ${plural(open, 'ouvert')}` : ''}` : "teste d'abord la connexion"}
+                {tested ? `${server.username}@${server.host}${open ? ` · ${plural(open, 'ouvert')}` : ''}` : server.publicKey ? "teste d'abord la connexion" : 'clé révoquée'}
               </div>
             </span>
           </button>

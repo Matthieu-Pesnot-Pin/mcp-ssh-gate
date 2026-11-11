@@ -1,4 +1,4 @@
-import type { GateRequest, RequestsResponse, ServerView, StateResponse, TerminalView, TerminalsResponse, TestConnectionResponse } from '@shared/model'
+import type { GateRequest, RequestsResponse, RotationResponse, ServerView, StateResponse, TerminalView, TerminalsResponse, TestConnectionResponse } from '@shared/model'
 
 export interface ServerFields {
   name: string
@@ -40,6 +40,10 @@ export const api = {
   updateServer: (id: string, fields: ServerFields) => send<ServerView>('PUT', server(id), fields),
   deleteServer: (id: string) => send<{ deleted: true }>('DELETE', server(id)),
   testConnection: (id: string) => send<TestConnectionResponse>('POST', `${server(id)}/test`),
+  newKey: (id: string) => send<ServerView>('POST', `${server(id)}/key`),
+  rotateKey: (id: string) => send<RotationResponse>('POST', `${server(id)}/key/rotate`),
+  revokeKey: (id: string) => send<ServerView>('POST', `${server(id)}/key/revoke`),
+  forgetKey: (id: string) => send<ServerView>('POST', `${server(id)}/key/forget`),
   updateNotes: (id: string, notes: string, expectedUpdatedAt: string | null) =>
     send<ServerView>('PUT', `${server(id)}/notes`, { notes, expectedUpdatedAt }),
   disconnect: (id: string) => send<ServerView>('POST', `${server(id)}/disconnect`),

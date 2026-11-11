@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
 import ssh2, { type Client, type ClientChannel } from "ssh2";
-import { GateError } from "./errors.js";
+import { AuthRefusedError, GateError } from "./errors.js";
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const READY_MARKER = /__SSHGATE_READY_(\d+)_(.*)__\n/;
@@ -81,7 +81,7 @@ export class CommandOutputParser {
 
 function connectionErrorMessage(err: any, target: ShellTarget): string {
   if (err?.level === "client-authentication") {
-    return `Authentification refusée pour ${target.username}@${target.host} : la clé publique n'est pas dans ~/.ssh/authorized_keys de cet utilisateur.`;
+    return `Authentification refusée pour ${target.username}@${target.host} : le serveur n'accepte pas la clé de SSH Gate. Colle la commande d'installation sur le serveur, puis teste à nouveau.`;
   }
   if (err?.level === "client-timeout") return `Le serveur ${target.host}:${target.port} n'a pas répondu dans les ${CONNECT_TIMEOUT_MS / 1000} s.`;
   return `Connexion SSH impossible à ${target.host}:${target.port} : ${err?.message ?? err}`;
@@ -94,10 +94,6 @@ interface RunningCommand {
 }
 
 /**
- * Connexion SSH et shell bash persistant, sans terminal : les commandes
- * s'enchaînent dans le même shell, une à la fois.
- */
-/**
  * Ouvre une connexion SSH authentifiée. Avec une empreinte attendue, une clé
  * d'hôte différente la fait échouer ; l'empreinte vue est renvoyée.
  */
@@ -107,11 +103,11 @@ export function connectSsh(target: ShellTarget): Promise<{ client: Client; finge
     let seenFingerprint: string | null = null;
     let settled = false;
 
-    const fail = (message: string) => {
+    const fail = (message: string, authRefused = false) => {
       if (settled) return;
       settled = true;
       client.end();
-      reject(new GateError(message));
+      reject(authRefused ? new AuthRefusedError(message) : new GateError(message));
     };
 
     client.on("ready", () => {
@@ -126,7 +122,7 @@ export function connectSsh(target: ShellTarget): Promise<{ client: Client; finge
           `La clé d'hôte de ${target.host} a changé (${seenFingerprint}, attendue ${target.expectedFingerprint}). Connexion refusée : vérifie le serveur, puis modifie-le dans l'interface pour enregistrer la nouvelle empreinte.`
         );
       }
-      fail(connectionErrorMessage(err, target));
+      fail(connectionErrorMessage(err, target), err?.level === "client-authentication");
     });
 
     client.connect({
@@ -144,6 +140,24 @@ export function connectSsh(target: ShellTarget): Promise<{ client: Client; finge
   });
 }
 
+/** Exécute un script sh transmis sur l'entrée standard ; renvoie son code de retour et sa sortie fusionnée. */
+export function execScript(client: Client, script: string): Promise<{ code: number | null; output: string }> {
+  return new Promise((resolve, reject) => {
+    client.exec("sh -s", (err, channel) => {
+      if (err) return reject(new GateError(`Exécution impossible sur le serveur : ${err.message}`));
+      let output = "";
+      channel.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
+      channel.stderr.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
+      channel.on("close", (code: number | null) => resolve({ code, output }));
+      channel.end(script);
+    });
+  });
+}
+
+/**
+ * Connexion SSH et shell bash persistant, sans terminal : les commandes
+ * s'enchaînent dans le même shell, une à la fois.
+ */
 export class ShellSession {
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly stderrDecoder = new StringDecoder("utf8");

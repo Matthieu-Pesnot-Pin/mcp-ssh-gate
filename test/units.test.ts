@@ -46,7 +46,7 @@ test("server store keeps the private key encrypted and verifies the vault", () =
   const server = store.create({ name: "Prod Web", host: "10.0.0.12", port: 22, username: "deploy" });
 
   assert.equal(server.id, "prod-web");
-  assert.match(server.publicKey, /^ssh-ed25519 /);
+  assert.match(server.publicKey!, /^ssh-ed25519 /);
   assert.ok(!fs.readFileSync(path.join(dir, "servers.json"), "utf8").includes("OPENSSH PRIVATE KEY"));
   assert.match(store.privateKey("prod-web"), /OPENSSH PRIVATE KEY/);
   assert.equal(store.get("PROD WEB").id, "prod-web");

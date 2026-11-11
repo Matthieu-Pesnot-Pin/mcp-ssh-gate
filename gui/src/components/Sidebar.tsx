@@ -12,6 +12,7 @@ interface Props {
 }
 
 function subtitle(server: ServerView): string {
+  if (!server.publicKey) return 'clé révoquée'
   if (!server.hostKeyFingerprint) return 'connexion à tester'
   if (server.session === 'closed') return 'shell fermé'
   return `${server.username}@${server.host}`

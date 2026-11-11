@@ -12,6 +12,10 @@ import type { GateRequest } from "../shared/model.js";
 import type { TerminalServerMessage } from "../shared/model.js";
 import { Executor } from "../src/core/executor.js";
 import { TerminalManager } from "../src/core/terminals.js";
+import { KeyService } from "../src/core/keys.js";
+import { AuthRefusedError } from "../src/core/errors.js";
+import { connectSsh } from "../src/core/ssh-session.js";
+import { DEDICATED_KEY_FILE, installCommand, keyLine } from "../shared/install.js";
 import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
 import { generateVaultKey, parseVaultKey } from "../src/core/vault.js";
@@ -21,22 +25,46 @@ interface FakeSsh {
   close: () => void;
   /** Tailles de terminal demandées : à l'ouverture, puis à chaque redimensionnement. */
   windows: { cols: number; rows: number }[];
+  /** Avec un ensemble, seules ces clés (type et corps) sont acceptées, quel que soit le contenu des fichiers. */
+  frozen: Set<string> | null;
+}
+
+/** Clés (type et corps) listées dans un fichier authorized_keys, options ignorées. */
+function keysIn(file: string): string[] {
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .split("\n")
+    .map((line) => /(ssh-ed25519 \S+)/.exec(line)?.[1])
+    .filter((key): key is string => !!key);
 }
 
 /**
- * Faux serveur SSH : accepte la clé publique du serveur enregistré, exécute
- * chaque `exec` dans un bash local et sert un `shell` par un bash qui lit son
- * entrée standard.
+ * Faux serveur SSH : exécute chaque `exec` dans un bash local et sert un
+ * `shell` par un bash qui lit son entrée standard. Avec une clé, il accepte
+ * cette clé ; avec un dossier personnel, il accepte les clés de
+ * `.ssh/authorized_keys.d/ssh-gate` et `.ssh/authorized_keys`, et les commandes
+ * s'exécutent avec ce dossier pour HOME.
  */
-function startFakeSshServer(authorizedKey: string): Promise<FakeSsh> {
+function startFakeSshServer(access: { key: string } | { home: string }): Promise<FakeSsh> {
   const windows: { cols: number; rows: number }[] = [];
   const hostKey = utils.generateKeyPairSync("ed25519").private;
-  const allowed = utils.parseKey(authorizedKey);
-  if (allowed instanceof Error) throw allowed;
+  const home = "home" in access ? access.home : null;
+  const env = home ? { ...process.env, HOME: home, SSH_CLIENT: "127.0.0.1 50000 22" } : process.env;
+  const fake: FakeSsh = { port: 0, close: () => {}, windows, frozen: null };
+
+  const accepted = (): string[] => {
+    if (fake.frozen) return [...fake.frozen];
+    if (!home) return ["key" in access ? access.key.split(" ").slice(0, 2).join(" ") : ""];
+    return [...keysIn(path.join(home, ".ssh/authorized_keys.d/ssh-gate")), ...keysIn(path.join(home, ".ssh/authorized_keys"))];
+  };
 
   const sshServer = new Server({ hostKeys: [hostKey] }, (client: Connection) => {
     client.on("authentication", (ctx) => {
-      if (ctx.method === "publickey" && ctx.key.data.equals(allowed.getPublicSSH())) return ctx.accept();
+      if (ctx.method === "publickey") {
+        const offered = `${ctx.key.algo} ${ctx.key.data.toString("base64")}`;
+        if (accepted().includes(offered)) return ctx.accept();
+      }
       ctx.reject(["publickey"]);
     });
     client.on("ready", () => {
@@ -52,7 +80,7 @@ function startFakeSshServer(authorizedKey: string): Promise<FakeSsh> {
         });
         session.on("shell", (acceptShell) => {
           const stream = acceptShell();
-          const child = spawn("bash", ["-s"], { stdio: "pipe" });
+          const child = spawn("bash", ["-s"], { stdio: "pipe", env });
           stream.pipe(child.stdin);
           child.stdout.pipe(stream, { end: false });
           child.stderr.pipe(stream.stderr, { end: false });
@@ -64,7 +92,7 @@ function startFakeSshServer(authorizedKey: string): Promise<FakeSsh> {
         });
         session.on("exec", (acceptExec, _reject, info) => {
           const stream = acceptExec();
-          const child = spawn("bash", ["-c", info.command], { stdio: "pipe" });
+          const child = spawn("bash", ["-c", info.command], { stdio: "pipe", env });
           stream.pipe(child.stdin);
           child.stdout.pipe(stream, { end: false });
           child.stderr.pipe(stream.stderr, { end: false });
@@ -81,7 +109,9 @@ function startFakeSshServer(authorizedKey: string): Promise<FakeSsh> {
 
   return new Promise((resolve) => {
     sshServer.listen(0, "127.0.0.1", () => {
-      resolve({ port: (sshServer.address() as any).port, close: () => sshServer.close(), windows });
+      fake.port = (sshServer.address() as any).port;
+      fake.close = () => sshServer.close();
+      resolve(fake);
     });
   });
 }
@@ -103,7 +133,7 @@ test("approved commands run in a persistent shell and stop at the first failure"
   const executor = new Executor(servers, requests, () => {});
 
   const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
-  const fake = await startFakeSshServer(placeholder.publicKey);
+  const fake = await startFakeSshServer({ key: placeholder.publicKey! });
   t.after(() => {
     executor.disconnect("local");
     fake.close();
@@ -160,7 +190,7 @@ test("an interactive terminal streams the shell, replays its output and follows 
   const terminals = new TerminalManager(servers, () => {});
 
   const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
-  const fake = await startFakeSshServer(placeholder.publicKey);
+  const fake = await startFakeSshServer({ key: placeholder.publicKey! });
   t.after(() => fake.close());
   servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
 
@@ -201,4 +231,85 @@ test("an interactive terminal streams the shell, replays its output and follows 
   terminals.close(opened.id);
   assert.equal(terminals.list().length, 1);
   assert.throws(() => terminals.attach(opened.id, () => {}), /n'existe plus/);
+});
+
+test("the key lives in the dedicated file: restricted at test, rotated, then revoked", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-keys-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-home-")).replace(/\\/g, "/");
+  const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
+  const executor = new Executor(servers, new RequestStore(dataDir), () => {});
+  const terminals = new TerminalManager(servers, () => {});
+  const keys = new KeyService(servers, executor, terminals, () => {});
+
+  const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
+  const fake = await startFakeSshServer({ home });
+  t.after(() => {
+    executor.disconnect("local");
+    fake.close();
+  });
+  servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
+
+  const dedicated = path.join(home, DEDICATED_KEY_FILE);
+  const authorized = path.join(home, ".ssh/authorized_keys");
+  fs.mkdirSync(path.dirname(dedicated), { recursive: true });
+  fs.writeFileSync(dedicated, `${keyLine(placeholder.publicKey!)}\n`);
+  fs.writeFileSync(authorized, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOwnUserOwnKeyStaysUntouchedXXXXXXXXXXXXXX me@laptop\n");
+  const ownKeys = fs.readFileSync(authorized, "utf8");
+
+  await executor.testConnection("local");
+  const status = await keys.restrictToGate("local");
+  assert.deepEqual(status, { inDedicatedFile: true, inAuthorizedKeys: false, allowedFrom: "127.0.0.1", restrictError: null });
+  assert.equal(fs.readFileSync(dedicated, "utf8"), `${keyLine(placeholder.publicKey!, "127.0.0.1")}\n`);
+  assert.equal(servers.get("local").allowedFrom, "127.0.0.1");
+
+  const oldKey = servers.privateKey("local");
+  const oldPublic = servers.get("local").publicKey!;
+  const rotated = await keys.rotate("local");
+  assert.equal(rotated.error, null);
+  assert.deepEqual(rotated.steps, ["done", "done", "done", "done"]);
+  const newPublic = servers.get("local").publicKey!;
+  assert.notEqual(newPublic, oldPublic);
+  assert.equal(fs.readFileSync(dedicated, "utf8"), `${keyLine(newPublic, "127.0.0.1")}\n`);
+  const target = { host: "127.0.0.1", port: fake.port, username: "tester", expectedFingerprint: servers.get("local").hostKeyFingerprint };
+  await assert.rejects(connectSsh({ ...target, privateKey: oldKey }), AuthRefusedError);
+
+  fake.frozen = new Set([newPublic.split(" ").slice(0, 2).join(" ")]);
+  const refused = await keys.rotate("local");
+  fake.frozen = null;
+  assert.deepEqual(refused.steps, ["done", "done", "failed", "skipped"]);
+  assert.match(refused.error ?? "", /n'accepte pas la clé/);
+  assert.equal(servers.get("local").publicKey, newPublic);
+  assert.equal(fs.readFileSync(dedicated, "utf8"), `${keyLine(newPublic, "127.0.0.1")}\n`);
+
+  const revoked = await keys.revoke("local");
+  assert.equal(revoked.publicKey, null);
+  assert.equal(fs.readFileSync(dedicated, "utf8"), "");
+  assert.equal(fs.readFileSync(authorized, "utf8"), ownKeys);
+  assert.throws(() => servers.privateKey("local"), /révoquée/);
+  assert.equal(executor.view(servers.get("local")).session, "closed");
+
+  const reinstalled = keys.installNewKey("local");
+  assert.match(reinstalled.publicKey ?? "", /^ssh-ed25519 /);
+  assert.notEqual(reinstalled.publicKey, newPublic);
+  assert.throws(() => keys.installNewKey("local"), /déjà une clé/);
+
+  fs.writeFileSync(dedicated, `${keyLine(reinstalled.publicKey!)}\n`);
+  fs.appendFileSync(authorized, `${reinstalled.publicKey}\n`);
+  await assert.rejects(keys.revoke("local"), /accepte toujours la clé/);
+  assert.equal(fs.readFileSync(dedicated, "utf8"), "");
+  assert.equal(servers.get("local").publicKey, reinstalled.publicKey);
+
+  fs.writeFileSync(authorized, ownKeys);
+  await assert.rejects(keys.revoke("local"), /n'a pas pu se connecter/);
+  assert.equal(keys.forget("local").publicKey, null);
+});
+
+test("the install command writes the dedicated file and only reloads sshd after checking it", () => {
+  const command = installCommand("ssh-ed25519 AAAAKEY mcp-ssh-gate@prod");
+  assert.ok(!command.includes("\n"));
+  assert.match(command, /printf '%s\\n' 'restrict,pty ssh-ed25519 AAAAKEY mcp-ssh-gate@prod' > ~\/\.ssh\/authorized_keys\.d\/ssh-gate/);
+  assert.match(command, /AuthorizedKeysFile \.ssh\/authorized_keys \.ssh\/authorized_keys\.d\/ssh-gate/);
+  assert.match(command, /if sudo sshd -t && sudo sshd -T .* \| grep -q 'authorized_keys\.d\/ssh-gate'; then sudo systemctl reload sshd/);
+  assert.match(command, /else sudo rm -f \/etc\/ssh\/sshd_config\.d\/10-ssh-gate\.conf/);
+  assert.equal(keyLine("ssh-ed25519 AAAAKEY c", "203.0.113.7"), 'restrict,pty,from="203.0.113.7" ssh-ed25519 AAAAKEY c');
 });

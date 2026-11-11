@@ -2,7 +2,7 @@
 
 Un agent propose des commandes à exécuter sur un serveur de production ; tu les lis, les modifies ou les refuses dans une interface web, et seules celles que tu valides partent sur le serveur, en SSH. Le résultat revient à l'agent sans copier-coller.
 
-L'agent ne détient aucun accès au serveur. La paire de clés SSH est générée par le MCP à l'ajout d'un serveur ; tu poses la clé publique sur le serveur, la clé privée reste chiffrée dans le MCP et n'est jamais affichée.
+L'agent ne détient aucun accès au serveur. La paire de clés SSH est générée par le MCP à l'ajout d'un serveur ; tu poses la clé publique sur le serveur dans un fichier qui lui est propre, la clé privée reste chiffrée dans le MCP et n'est jamais affichée.
 
 ```
 Agent ──submit_commands──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
@@ -134,10 +134,22 @@ Un réglage requis absent ou invalide arrête le lancement avec un message qui d
 
 1. **Ajouter un serveur** dans l'interface : nom, hôte, port, utilisateur.
 2. Le MCP génère une paire `ed25519`. La clé privée est chiffrée avec `VAULT_KEY` dans `DATA_DIR/servers.json`.
-3. Copie la clé publique affichée dans `~/.ssh/authorized_keys` de l'utilisateur, sur le serveur (une commande prête à coller est proposée).
-4. **Tester la connexion** : l'empreinte de la clé d'hôte est enregistrée. Si elle change plus tard, la connexion est refusée. Changer l'hôte ou le port du serveur efface l'empreinte : il faut tester à nouveau.
+3. Colle la **commande d'installation** affichée dans une session ouverte sur le serveur, en tant que cet utilisateur. Sur une seule ligne, elle :
+   - écrit la clé dans un fichier propre à SSH Gate, `~/.ssh/authorized_keys.d/ssh-gate`, précédée de `restrict,pty` (pas de redirection de ports, d'agent ni de X11 ; pseudo-terminal autorisé pour les terminaux) ;
+   - ajoute avec sudo `/etc/ssh/sshd_config.d/10-ssh-gate.conf`, qui fait lire ce fichier à sshd **en plus** de `~/.ssh/authorized_keys` ;
+   - vérifie la configuration (`sshd -t`, puis `sshd -T` pour s'assurer que le fichier dédié est pris en compte) avant de recharger sshd. Sinon, le réglage ajouté est retiré et sshd n'est pas rechargé.
+
+   `~/.ssh/authorized_keys` n'est jamais modifié : tes propres clés n'en dépendent pas. Le système doit lire `/etc/ssh/sshd_config.d/` (cas par défaut sur Debian et Ubuntu).
+4. **Tester la connexion** : l'empreinte de la clé d'hôte est enregistrée. Si elle change plus tard, la connexion est refusée. Changer l'hôte ou le port du serveur efface l'empreinte : il faut tester à nouveau. Le test limite aussi la ligne de la clé à l'adresse de SSH Gate vue par le serveur (`from="…"`) ; la nouvelle ligne est vérifiée par une seconde connexion, et remise dans son état d'origine si le serveur la refuse. Si l'adresse de SSH Gate change, seul son accès est coupé : recolle la commande d'installation.
 
 Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de commandes à ce serveur.
+
+### Renouveler ou révoquer la clé
+
+Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un fichier temporaire renommé.
+
+- **Renouveler la clé** : SSH Gate génère une nouvelle paire, l'ajoute à côté de l'actuelle, l'essaie sur une seconde connexion, puis ne garde qu'elle. Un échec avant la dernière étape retire la ligne ajoutée : la clé actuelle continue de fonctionner. Refusé si la clé figure aussi dans `~/.ssh/authorized_keys`, où elle resterait valable.
+- **Révoquer la clé** : SSH Gate vide son fichier, vérifie que le serveur refuse désormais la clé, ferme son shell et ses terminaux, puis efface la paire. Le serveur reste dans la liste ; « Installer une clé » en génère une nouvelle. Si le serveur ne répond pas, l'interface donne la commande à lancer soi-même (`: > ~/.ssh/authorized_keys.d/ssh-gate`) puis efface la clé.
 
 ## Les outils
 

@@ -7,8 +7,8 @@ import { readJson, withFileLock, writeJsonAtomic } from "./files.js";
 import { decryptSecret, encryptSecret } from "./vault.js";
 
 export interface StoredServer extends ServerPublic {
-  /** Clé privée OpenSSH chiffrée avec VAULT_KEY. */
-  privateKeyEncrypted: string;
+  /** Clé privée OpenSSH chiffrée avec VAULT_KEY ; null quand la clé a été révoquée. */
+  privateKeyEncrypted: string | null;
 }
 
 interface ServersFile {
@@ -53,6 +53,17 @@ function slugify(name: string): string {
   return slug || "serveur";
 }
 
+export interface KeyPair {
+  public: string;
+  private: string;
+}
+
+/** Nouvelle paire ed25519, commentée au nom du serveur. */
+export function generateKeyPair(serverId: string): KeyPair {
+  const keys = ssh2.utils.generateKeyPairSync("ed25519", { comment: `mcp-ssh-gate@${serverId}` });
+  return { public: keys.public, private: keys.private };
+}
+
 export function toPublic(server: StoredServer): ServerPublic {
   const { privateKeyEncrypted: _privateKey, ...rest } = server;
   return rest;
@@ -78,6 +89,8 @@ export class ServerStore {
       notes: server.notes ?? "",
       notesUpdatedAt: server.notesUpdatedAt ?? null,
       notesUpdatedBy: server.notesUpdatedBy ?? null,
+      keyCreatedAt: server.keyCreatedAt ?? (server.publicKey ? server.createdAt : null),
+      allowedFrom: server.allowedFrom ?? null,
     }));
   }
 
@@ -98,13 +111,16 @@ export class ServerStore {
       let id = base;
       for (let n = 2; servers.some((s) => s.id === id); n++) id = `${base}-${n}`;
 
-      const keys = ssh2.utils.generateKeyPairSync("ed25519", { comment: `mcp-ssh-gate@${id}` });
+      const keys = generateKeyPair(id);
+      const createdAt = new Date().toISOString();
       const server: StoredServer = {
         id,
         ...fields,
         publicKey: keys.public,
+        keyCreatedAt: createdAt,
+        allowedFrom: null,
         hostKeyFingerprint: null,
-        createdAt: new Date().toISOString(),
+        createdAt,
         notes: "",
         notesUpdatedAt: null,
         notesUpdatedBy: null,
@@ -132,6 +148,38 @@ export class ServerStore {
       const server = servers.find((s) => s.id === id);
       if (!server) throw new GateError(`Unknown server "${id}".`);
       server.hostKeyFingerprint = fingerprint;
+      return server;
+    });
+  }
+
+  /** Remplace la paire de clés ; la limite d'adresse suit la ligne écrite sur le serveur. */
+  replaceKey(id: string, keys: KeyPair, allowedFrom: string | null): StoredServer {
+    return this.mutate((servers) => {
+      const server = this.find(servers, id);
+      server.publicKey = keys.public;
+      server.privateKeyEncrypted = encryptSecret(keys.private, this.vaultKey);
+      server.keyCreatedAt = new Date().toISOString();
+      server.allowedFrom = allowedFrom;
+      return server;
+    });
+  }
+
+  /** Efface la paire de clés : le serveur reste enregistré, sans accès. */
+  clearKey(id: string): StoredServer {
+    return this.mutate((servers) => {
+      const server = this.find(servers, id);
+      server.publicKey = null;
+      server.privateKeyEncrypted = null;
+      server.keyCreatedAt = null;
+      server.allowedFrom = null;
+      return server;
+    });
+  }
+
+  setAllowedFrom(id: string, allowedFrom: string | null): StoredServer {
+    return this.mutate((servers) => {
+      const server = this.find(servers, id);
+      server.allowedFrom = allowedFrom;
       return server;
     });
   }
@@ -169,12 +217,17 @@ export class ServerStore {
   }
 
   privateKey(id: string): string {
-    return decryptSecret(this.get(id).privateKeyEncrypted, this.vaultKey);
+    const server = this.get(id);
+    if (!server.privateKeyEncrypted) {
+      throw new GateError(`La clé de ${server.name} a été révoquée : installe une nouvelle clé depuis l'interface.`);
+    }
+    return decryptSecret(server.privateKeyEncrypted, this.vaultKey);
   }
 
   /** Vérifie que VAULT_KEY déchiffre toutes les clés enregistrées. */
   verifyVault(): void {
     for (const server of this.list()) {
+      if (!server.privateKeyEncrypted) continue;
       try {
         decryptSecret(server.privateKeyEncrypted, this.vaultKey);
       } catch {
@@ -183,6 +236,12 @@ export class ServerStore {
         );
       }
     }
+  }
+
+  private find(servers: StoredServer[], id: string): StoredServer {
+    const server = servers.find((s) => s.id === id);
+    if (!server) throw new GateError(`Unknown server "${id}".`);
+    return server;
   }
 
   private mutate<T>(fn: (servers: StoredServer[]) => T): T {

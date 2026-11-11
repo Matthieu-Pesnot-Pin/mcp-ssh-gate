@@ -6,9 +6,9 @@ import { usePolling } from './usePolling'
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
 import { TerminalsScreen } from './components/TerminalsScreen'
-import { ConfirmDeleteModal, EditServerModal, ServerModal } from './components/Modals'
+import { ConfirmDeleteModal, EditServerModal, RevokeKeyModal, RotateKeyModal, ServerModal } from './components/Modals'
 
-type Dialog = { kind: 'add' } | { kind: 'key'; server: ServerView } | { kind: 'edit'; server: ServerView } | { kind: 'delete'; server: ServerView } | null
+type Dialog = { kind: 'add' } | { kind: 'key' | 'edit' | 'delete' | 'rotate' | 'revoke'; server: ServerView } | null
 
 const TERMINALS_HASH = '#terminaux'
 
@@ -54,6 +54,16 @@ export default function App() {
     select(server.id)
   }
 
+  async function installKey(server: ServerView) {
+    try {
+      const updated = await api.newKey(server.id)
+      onSaved(updated)
+      setDialog({ kind: 'key', server: updated })
+    } catch (err) {
+      setNotice((err as Error).message)
+    }
+  }
+
   return (
     <div className="app">
       <Sidebar
@@ -75,6 +85,9 @@ export default function App() {
           onChanged={state.reload}
           onError={setNotice}
           onShowKey={() => setDialog({ kind: 'key', server: selected })}
+          onInstallKey={() => void installKey(selected)}
+          onRotate={() => setDialog({ kind: 'rotate', server: selected })}
+          onRevoke={() => setDialog({ kind: 'revoke', server: selected })}
           onEdit={() => setDialog({ kind: 'edit', server: selected })}
           onDelete={() => setDialog({ kind: 'delete', server: selected })}
         />
@@ -96,6 +109,18 @@ export default function App() {
 
       {dialog?.kind === 'add' && <ServerModal server={null} onClose={() => setDialog(null)} onSaved={onSaved} />}
       {dialog?.kind === 'key' && <ServerModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}
+      {dialog?.kind === 'rotate' && <RotateKeyModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}
+      {dialog?.kind === 'revoke' && (
+        <RevokeKeyModal
+          server={dialog.server}
+          terminalCount={terminalList.filter((t) => t.serverId === dialog.server.id && t.status === 'open').length}
+          onClose={() => setDialog(null)}
+          onSaved={(server) => {
+            onSaved(server)
+            terminals.reload()
+          }}
+        />
+      )}
       {dialog?.kind === 'edit' && <EditServerModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}
       {dialog?.kind === 'delete' && (
         <ConfirmDeleteModal

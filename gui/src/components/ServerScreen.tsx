@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CornerDownLeft, Ellipsis, KeyRound, Pencil, Trash2, Unplug } from 'lucide-react'
-import type { GateRequest, ServerView } from '@shared/model'
+import { Ban, CornerDownLeft, Ellipsis, KeyRound, Pencil, RefreshCw, Trash2, Unplug } from 'lucide-react'
+import { isReady, type GateRequest, type ServerView } from '@shared/model'
 import { api } from '../api'
 import { usePolling } from '../usePolling'
 import { Journal } from './Journal'
@@ -12,11 +12,14 @@ interface Props {
   onChanged: () => void
   onError: (message: string) => void
   onShowKey: () => void
+  onInstallKey: () => void
+  onRotate: () => void
+  onRevoke: () => void
   onEdit: () => void
   onDelete: () => void
 }
 
-function ServerMenu({ server, onChanged, onError, onShowKey, onEdit, onDelete }: Props) {
+function ServerMenu({ server, onChanged, onError, onShowKey, onInstallKey, onRotate, onRevoke, onEdit, onDelete }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -50,10 +53,23 @@ function ServerMenu({ server, onChanged, onError, onShowKey, onEdit, onDelete }:
       </button>
       {open && (
         <div className="menu">
-          <button onClick={() => pick(onShowKey)}>
-            <KeyRound size={16} />
-            Clé publique et test
-          </button>
+          {server.publicKey ? (
+            <>
+              <button onClick={() => pick(onShowKey)}>
+                <KeyRound size={16} />
+                Installation et test
+              </button>
+              <button onClick={() => pick(onRotate)} disabled={server.busy || !server.hostKeyFingerprint}>
+                <RefreshCw size={16} />
+                Renouveler la clé
+              </button>
+            </>
+          ) : (
+            <button onClick={() => pick(onInstallKey)}>
+              <KeyRound size={16} />
+              Installer une clé
+            </button>
+          )}
           <button onClick={() => pick(onEdit)}>
             <Pencil size={16} />
             Modifier
@@ -62,6 +78,12 @@ function ServerMenu({ server, onChanged, onError, onShowKey, onEdit, onDelete }:
             <button onClick={() => pick(() => void disconnect())} disabled={server.busy}>
               <Unplug size={16} />
               Fermer le shell
+            </button>
+          )}
+          {server.publicKey && (
+            <button className="danger" onClick={() => pick(onRevoke)} disabled={server.busy}>
+              <Ban size={16} />
+              Révoquer la clé
             </button>
           )}
           <button className="danger" onClick={() => pick(onDelete)} disabled={server.busy}>
@@ -130,7 +152,7 @@ function ManualPrompt({ server, disabledReason, onRun, onError }: { server: Serv
 
 /** Session d'un serveur : historique, demande en attente ou exécution en cours, saisie manuelle. */
 export function ServerScreen(props: Props) {
-  const { server, onChanged, onError, onShowKey } = props
+  const { server, onChanged, onError, onShowKey, onInstallKey } = props
   const active = server.busy || server.pendingCount > 0
   const polled = usePolling(`requests:${server.id}`, () => api.requests(server.id), active ? 1000 : 2500)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -155,8 +177,10 @@ export function ServerScreen(props: Props) {
 
   const [tab, setTab] = useState<'session' | 'notes'>('session')
 
-  const tested = !!server.hostKeyFingerprint
-  const disabledReason = !tested
+  const tested = isReady(server)
+  const disabledReason = !server.publicKey
+    ? 'Clé révoquée : installe une nouvelle clé pour exécuter des commandes'
+    : !tested
     ? 'Teste la connexion avant d’exécuter des commandes'
     : running
       ? 'Disponible à la fin de l’exécution'
@@ -191,7 +215,7 @@ export function ServerScreen(props: Props) {
         ) : (
           <span className="chip">
             <span className="dot" />
-            {tested ? 'Shell fermé' : 'Non testé'}
+            {!server.publicKey ? 'Clé révoquée' : tested ? 'Shell fermé' : 'Non testé'}
           </span>
         )}
         <ServerMenu {...props} />
@@ -212,14 +236,24 @@ export function ServerScreen(props: Props) {
           stickToBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40
         }}
       >
-        {!tested && (
+        {!server.publicKey ? (
           <div className="banner">
             <KeyRound size={18} />
-            <span>La connexion à ce serveur n'a jamais été testée. Pose la clé publique sur le serveur, puis teste la connexion.</span>
-            <button className="btn btn-secondary" onClick={onShowKey}>
-              Clé publique et test
+            <span>La clé de ce serveur a été révoquée : SSH Gate n'y a plus accès.</span>
+            <button className="btn btn-secondary" onClick={onInstallKey}>
+              Installer une clé
             </button>
           </div>
+        ) : (
+          !tested && (
+            <div className="banner">
+              <KeyRound size={18} />
+              <span>La connexion à ce serveur n'a jamais été testée. Colle la commande d'installation sur le serveur, puis teste la connexion.</span>
+              <button className="btn btn-secondary" onClick={onShowKey}>
+                Installation et test
+              </button>
+            </div>
+          )
         )}
         {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
         {polled.data && <Journal requests={finished} onShared={refresh} onError={onError} />}

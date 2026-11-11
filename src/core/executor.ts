@@ -196,7 +196,7 @@ export class Executor {
     }
   }
 
-  private assertIdle(serverId: string): void {
+  assertIdle(serverId: string): void {
     if (this.running.has(serverId)) throw new GateError("Une exécution est déjà en cours sur ce serveur.");
   }
 

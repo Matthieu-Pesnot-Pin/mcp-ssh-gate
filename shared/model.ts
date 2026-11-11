@@ -56,7 +56,12 @@ export interface ServerPublic {
   host: string;
   port: number;
   username: string;
-  publicKey: string;
+  /** Clé publique OpenSSH ; null quand la clé a été révoquée. */
+  publicKey: string | null;
+  /** Création de la paire de clés actuelle ; null quand la clé a été révoquée. */
+  keyCreatedAt: string | null;
+  /** Adresse à laquelle la ligne de la clé est limitée (`from=`) sur le serveur, relevée au dernier test. */
+  allowedFrom: string | null;
   /** Empreinte SHA256 de la clé d'hôte, enregistrée au premier test de connexion. */
   hostKeyFingerprint: string | null;
   createdAt: string;
@@ -88,10 +93,37 @@ export interface RequestsResponse {
   requests: GateRequest[];
 }
 
+/** Place de la clé de SSH Gate sur le serveur, relevée par la connexion de test. */
+export interface KeyFileStatus {
+  /** La clé figure dans le fichier dédié ~/.ssh/authorized_keys.d/ssh-gate. */
+  inDedicatedFile: boolean;
+  /** La clé figure aussi dans ~/.ssh/authorized_keys, que SSH Gate ne modifie jamais. */
+  inAuthorizedKeys: boolean;
+  /** Adresse de la limite `from=` en place ; null sans limite. */
+  allowedFrom: string | null;
+  /** Raison pour laquelle la limite d'adresse n'a pas pu être posée. */
+  restrictError: string | null;
+}
+
 export interface TestConnectionResponse {
   server: ServerView;
   fingerprint: string;
   cwd: string;
+  keyFile: KeyFileStatus;
+}
+
+export type KeyStepStatus = "done" | "failed" | "skipped";
+
+/** Déroulé d'un renouvellement : générer, ajouter, tester, retirer l'ancienne clé. */
+export interface RotationResponse {
+  server: ServerView;
+  steps: KeyStepStatus[];
+  error: string | null;
+}
+
+/** Vrai quand le serveur a une clé et une empreinte d'hôte enregistrée. */
+export function isReady(server: ServerPublic): boolean {
+  return !!server.publicKey && !!server.hostKeyFingerprint;
 }
 
 export type TerminalStatus = "open" | "closed";
