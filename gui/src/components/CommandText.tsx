@@ -46,6 +46,8 @@ interface Piece {
   text: string
   kind: Kind | null
   children?: Piece[]
+  /** Saut de ligne suivi d'un espace vertical, entre deux instructions séparées par ;. */
+  gap?: boolean
 }
 
 function commandKind(word: string): Kind {
@@ -130,7 +132,7 @@ function isBlank(piece: Piece): boolean {
 
 /**
  * Insère les sauts de ligne du mode "auto" : avant chaque && et ||, décalés ;
- * après chaque ; (sauf \;), qui repart au bord ; après un \ suivi d'un retour à
+ * après chaque ; (sauf \;), qui repart au bord après un espace vertical ; après un \ suivi d'un retour à
  * la ligne, décalé. Seuls les opérateurs de premier niveau comptent : ceux d'une
  * chaîne ou d'une substitution de commande sont imbriqués et restent en place.
  */
@@ -159,7 +161,9 @@ function breakLines(pieces: Piece[]): Piece[] {
     if ((text === ';' && previous !== '\\') || continuation) {
       out.push(piece)
       const next = skipBlanks(i + 1)
-      if (next < pieces.length) out.push({ text: text === ';' ? '\n' : `\n${CONTINUATION_INDENT}`, kind: null })
+      if (next < pieces.length) {
+        out.push(text === ';' ? { text: '', kind: null, gap: true } : { text: `\n${CONTINUATION_INDENT}`, kind: null })
+      }
       i = next - 1
       continue
     }
@@ -172,6 +176,7 @@ function breakLines(pieces: Piece[]): Piece[] {
 function render(pieces: Piece[], prefix: string): ReactNode[] {
   return pieces.map((piece, index) => {
     const key = `${prefix}${index}`
+    if (piece.gap) return <span key={key} className="hl-gap" />
     const content = piece.children ? render(piece.children, `${key}.`) : piece.text
     return piece.kind ? (
       <span key={key} className={`tk-${piece.kind}`}>

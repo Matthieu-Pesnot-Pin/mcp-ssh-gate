@@ -1780,3 +1780,9 @@ p {
 .settings-section-next {
   margin-top: 8px;
 }
+
+/* Espace entre deux instructions séparées par ; : le bloc force le retour à la ligne. */
+.hl-gap {
+  display: block;
+  height: 0.6em;
+}

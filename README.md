@@ -219,7 +219,7 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 - **Coloration des commandes** dans la demande en attente, l'exécution et le journal : nom de commande, options, chaînes, variables, opérateurs, et en rouge les commandes sensibles (`sudo`, `rm`, `dd`, `chmod`, `kill`, `shutdown`…). Le champ de modification reste sans couleur.
 - **Réglages** (engrenage en bas de la barre latérale), appliqués immédiatement et valables pour tous les navigateurs ; ils sont enregistrés dans `DATA_DIR/settings.json` :
   - **Coloration des commandes** : Sobre (par défaut), Contrastée, Vive, Minimale ou Aucune.
-  - **Commandes longues**, dans la demande en attente et le journal déplié : *Sauts de ligne automatiques* (par défaut) passe à la ligne avant chaque `&&` et `||` (décalés sous la commande qu'ils prolongent), après chaque `;` et après un `\` de continuation ; un opérateur entre guillemets ou un `\;` ne coupe pas la ligne. *Brutes* affiche la commande telle qu'écrite.
+  - **Commandes longues**, dans la demande en attente et le journal déplié : *Sauts de ligne automatiques* (par défaut) passe à la ligne avant chaque `&&` et `||` (décalés sous la commande qu'ils prolongent), après chaque `;` (suivi d'un léger espace vertical qui sépare les instructions indépendantes) et après un `\` de continuation ; un opérateur entre guillemets ou un `\;` ne coupe pas la ligne. *Brutes* affiche la commande telle qu'écrite.
 
 L'interface se met à jour par rafraîchissement périodique.
 
