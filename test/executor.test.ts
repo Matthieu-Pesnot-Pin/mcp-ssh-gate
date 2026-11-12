@@ -313,3 +313,27 @@ test("the install command writes the dedicated file and only reloads sshd after 
   assert.match(command, /else sudo rm -f \/etc\/ssh\/sshd_config\.d\/10-ssh-gate\.conf/);
   assert.equal(keyLine("ssh-ed25519 AAAAKEY c", "203.0.113.7"), 'restrict,pty,from="203.0.113.7" ssh-ed25519 AAAAKEY c');
 });
+
+test("questions: asked on a statement of a command, kept in line when commands are edited or removed", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-questions-"));
+  const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
+  const requests = new RequestStore(dir);
+  const executor = new Executor(servers, requests, () => {});
+  const request = requests.create({ serverId: "web", source: "agent", sessionId: "s", explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
+
+  executor.askQuestion(request.id, 0, "uptime");
+  executor.askQuestion(request.id, 2, "free -m");
+  assert.throws(() => executor.askQuestion(request.id, 0, "uptime"), /déjà été demandée/);
+  assert.throws(() => executor.askQuestion(request.id, 1, "whoami"), /ne fait pas partie/);
+  assert.throws(() => executor.askQuestion(request.id, 7, "ls"), /introuvable/);
+
+  executor.removeCommand(request.id, 1);
+  assert.deepEqual(requests.get(request.id).questions.map((q) => [q.commandIndex, q.statement]), [[0, "uptime"], [1, "free -m"]]);
+
+  executor.editCommand(request.id, 0, "hostname");
+  const [left] = requests.get(request.id).questions;
+  assert.deepEqual([left.commandIndex, left.statement], [1, "free -m"]);
+
+  executor.cancelQuestion(request.id, left.id);
+  assert.deepEqual(requests.get(request.id).questions, []);
+});

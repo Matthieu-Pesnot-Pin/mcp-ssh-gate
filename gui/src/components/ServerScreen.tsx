@@ -256,7 +256,7 @@ export function ServerScreen(props: Props) {
           )
         )}
         {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
-        {polled.data && <Journal requests={finished} onShared={refresh} onError={onError} />}
+        {polled.data && <Journal requests={finished} onChanged={refresh} onError={onError} />}
         {running && <RunCard request={running} onError={onError} />}
         {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={server.busy || !!running} onDone={refresh} onError={onError} />}
       </div>

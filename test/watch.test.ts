@@ -10,7 +10,7 @@ import type { GateRequest } from "../shared/model.js";
 import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
 import { generateVaultKey, parseVaultKey } from "../src/core/vault.js";
-import { FinishedRequestScanner, formatEvent, liveWatcherSince, writeHandoff } from "../src/core/watch.js";
+import { RequestEventScanner, formatEvent, liveWatcherSince, writeHandoff } from "../src/core/watch.js";
 import { callTool, type ToolContext } from "../src/tools/tools.js";
 
 const entry = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "index.js");
@@ -97,7 +97,7 @@ test("behind the gateway: enable_notifications returns a watch specification and
     sessionId: "ses_gw",
     dataDir,
     watchCommand: "",
-    finished: new FinishedRequestScanner(requests, "ses_gw"),
+    events: new RequestEventScanner(requests, "ses_gw"),
   };
 
   const enabled = await callTool(ctx, "enable_notifications", { _gateway_watch: { version: 1 } });
@@ -132,7 +132,7 @@ test("a command typed by the user is announced to every session once the user sh
   const store = new RequestStore(dataDir);
   const typed = store.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["df -h"] });
   finish(store, typed.id);
-  const scanner = new FinishedRequestScanner(store, "ses_any");
+  const scanner = new RequestEventScanner(store, "ses_any");
   assert.deepEqual(scanner.since(0), []);
 
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -143,7 +143,7 @@ test("a command typed by the user is announced to every session once the user sh
   });
   const [shared] = scanner.since(cursor);
   assert.equal(formatEvent(shared), `[ssh-gate] web — the user shared 1 command(s) they ran themselves (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id ${typed.id}`);
-  assert.deepEqual(new FinishedRequestScanner(store, "ses_other").since(cursor).map((r) => r.id), [typed.id]);
+  assert.deepEqual(new RequestEventScanner(store, "ses_other").since(cursor).map((r) => r.id), [typed.id]);
   assert.deepEqual(scanner.since(shared.eventMs), []);
 });
 
@@ -156,6 +156,52 @@ test("event lines describe refusals", () => {
     d.note = "pas en prod\naujourd'hui";
     d.finishedAt = new Date().toISOString();
   });
-  const [refused] = new FinishedRequestScanner(store, "s").since(0);
+  const [refused] = new RequestEventScanner(store, "s").since(0);
   assert.match(formatEvent(refused), /request \S+ refused by the user: pas en prod aujourd'hui —/);
+});
+
+test("questions: announced to the session of the request, answered once with answer_question, then silent", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-question-"));
+  const requests = new RequestStore(dataDir);
+  const ctx: ToolContext = {
+    servers: new ServerStore(dataDir, parseVaultKey(generateVaultKey())),
+    requests,
+    ensureGui: () => {},
+    guiUrl: () => null,
+    reconnectGui: async () => ({ content: [] }),
+    sessionId: "ses_q",
+    dataDir,
+    watchCommand: "",
+    events: new RequestEventScanner(requests, "ses_q"),
+  };
+  const request = requests.create({ serverId: "web", source: "agent", sessionId: "ses_q", explanation: "", commands: ["hostname; df -h /"] });
+  requests.update(request.id, (draft) => {
+    draft.questions.push({ id: "q_1", commandIndex: 0, statement: "df -h /", askedAt: new Date().toISOString(), answer: null, answeredAt: null });
+  });
+
+  const [asked] = ctx.events.since(0);
+  assert.equal(
+    formatEvent(asked),
+    `[ssh-gate] web — the user asks you to explain part of command 1/1 of request ${request.id}: df -h / — answer with answer_question, request_id ${request.id}, question_id q_1`
+  );
+  assert.deepEqual(new RequestEventScanner(requests, "ses_other").since(0), []);
+
+  const answered = await callTool(ctx, "answer_question", { request_id: request.id, question_id: "q_1", answer: "Affiche l'espace disque de la racine." });
+  assert.equal(answered.isError, undefined);
+  assert.equal(requests.get(request.id).questions[0].answer, "Affiche l'espace disque de la racine.");
+  assert.deepEqual(ctx.events.since(0), []);
+
+  const again = await callTool(ctx, "answer_question", { request_id: request.id, question_id: "q_1", answer: "Encore." });
+  assert.equal(again.isError, true);
+  assert.match((again.content[0] as { text: string }).text, /already been answered/);
+});
+
+test("a request saved before questions existed reads with an empty question list", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-legacy-"));
+  const store = new RequestStore(dataDir);
+  const request = store.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["uptime"] });
+  const file = path.join(dataDir, "requests", "web", `${request.id}.json`);
+  const { questions: _questions, ...legacy } = JSON.parse(fs.readFileSync(file, "utf8"));
+  fs.writeFileSync(file, JSON.stringify(legacy));
+  assert.deepEqual(store.get(request.id).questions, []);
 });

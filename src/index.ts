@@ -14,7 +14,7 @@ import { liveGuiUrl } from "./core/heartbeat.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore } from "./core/server-store.js";
 import { generateVaultKey } from "./core/vault.js";
-import { FinishedRequestScanner, newSessionId, removeOwnHandoffs, runWatchMode } from "./core/watch.js";
+import { RequestEventScanner, newSessionId, removeOwnHandoffs, runWatchMode } from "./core/watch.js";
 import { TOOL_DEFINITIONS, callTool, type ToolContext } from "./tools/tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -161,7 +161,7 @@ const toolContext: ToolContext = {
   sessionId,
   dataDir: config.dataDir,
   watchCommand: `node "${entryScript}" --watch ${sessionId}`,
-  finished: new FinishedRequestScanner(requests, sessionId),
+  events: new RequestEventScanner(requests, sessionId),
 };
 process.on("exit", removeOwnHandoffs);
 

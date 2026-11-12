@@ -5,7 +5,7 @@ import path from "node:path";
 import { isFinalStatus, type CommandStatus, type GateRequest, type RequestSource, type RequestStatus } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import { readJson, writeJsonAtomic } from "./files.js";
-import { RequestStore } from "./request-store.js";
+import { RequestStore, readRequestFile } from "./request-store.js";
 
 /** Durée maximale d'un Monitor côté hôte. */
 export const MONITOR_TIMEOUT_MS = 1_800_000;
@@ -21,10 +21,11 @@ export function newSessionId(): string {
   return `ses_${randomBytes(8).toString("hex")}`;
 }
 
-// --- Demandes terminées ------------------------------------------------------------
+// --- Événements à annoncer -----------------------------------------------------------
 
-/** Ce qu'il faut d'une demande pour l'annoncer ; la sortie des commandes n'est pas gardée. */
+/** Ce qu'il faut d'une demande terminée pour l'annoncer ; la sortie des commandes n'est pas gardée. */
 export interface FinishedRequest {
+  kind: "finished";
   id: string;
   serverId: string;
   source: RequestSource;
@@ -36,19 +37,36 @@ export interface FinishedRequest {
   commands: { status: CommandStatus; exitCode: number | null }[];
 }
 
+/** Question de l'utilisateur sur une instruction, pas encore répondue. */
+export interface QuestionAsked {
+  kind: "question";
+  /** Demande qui contient la commande. */
+  id: string;
+  serverId: string;
+  questionId: string;
+  commandIndex: number;
+  commandCount: number;
+  statement: string;
+  /** Instant où la question a été posée. */
+  eventMs: number;
+}
+
+export type GateEvent = FinishedRequest | QuestionAsked;
+
 interface CachedEntry {
   mtimeMs: number;
-  /** Demande annonçable de la session, ou null pour toute autre demande. */
-  finished: FinishedRequest | null;
+  /** Événements de la demande destinés à la session. */
+  events: GateEvent[];
 }
 
 /**
- * Lit les demandes à annoncer à une session : celles qu'elle a soumises, une fois
- * terminées, et les commandes que l'utilisateur a envoyées aux agents. Le curseur est
- * l'instant, en millisecondes, du dernier événement déjà annoncé. Seuls les fichiers
- * modifiés depuis la lecture précédente sont relus.
+ * Lit les événements à annoncer à une session : ses demandes une fois terminées, les
+ * commandes que l'utilisateur a envoyées aux agents, et les questions de l'utilisateur
+ * sur les commandes de la session ou sur les siennes. Le curseur est l'instant, en
+ * millisecondes, du dernier événement déjà annoncé. Seuls les fichiers modifiés depuis
+ * la lecture précédente sont relus.
  */
-export class FinishedRequestScanner {
+export class RequestEventScanner {
   private readonly cache = new Map<string, CachedEntry>();
 
   constructor(
@@ -56,22 +74,44 @@ export class FinishedRequestScanner {
     private readonly session: string
   ) {}
 
-  /** Demandes à annoncer après `cursor`, dans l'ordre des événements. */
-  since(cursor: number): FinishedRequest[] {
-    const found: FinishedRequest[] = [];
+  /** Événements à annoncer après `cursor`, dans l'ordre chronologique. */
+  since(cursor: number): GateEvent[] {
+    const found: GateEvent[] = [];
     for (const { file, mtimeMs } of this.requests.files()) {
       let entry = this.cache.get(file);
       if (!entry || entry.mtimeMs !== mtimeMs) {
         try {
-          entry = { mtimeMs, finished: this.toFinished(readJson<GateRequest>(file)) };
+          entry = { mtimeMs, events: this.toEvents(readRequestFile(file)) };
         } catch {
           continue;
         }
         this.cache.set(file, entry);
       }
-      if (entry.finished && entry.finished.eventMs > cursor) found.push(entry.finished);
+      for (const event of entry.events) if (event.eventMs > cursor) found.push(event);
     }
     return found.sort((a, b) => a.eventMs - b.eventMs);
+  }
+
+  private toEvents(request: GateRequest): GateEvent[] {
+    const events: GateEvent[] = [];
+    const finished = this.toFinished(request);
+    if (finished) events.push(finished);
+    const concerned = request.source === "user" || request.sessionId === this.session;
+    if (!concerned) return events;
+    for (const question of request.questions) {
+      if (question.answer !== null) continue;
+      events.push({
+        kind: "question",
+        id: request.id,
+        serverId: request.serverId,
+        questionId: question.id,
+        commandIndex: question.commandIndex,
+        commandCount: request.commands.length,
+        statement: question.statement,
+        eventMs: Date.parse(question.askedAt),
+      });
+    }
+    return events;
   }
 
   private toFinished(request: GateRequest): FinishedRequest | null {
@@ -79,6 +119,7 @@ export class FinishedRequestScanner {
     const eventAt = request.source === "agent" ? (request.sessionId === this.session ? request.finishedAt : null) : request.sharedAt;
     if (!eventAt) return null;
     return {
+      kind: "finished",
       id: request.id,
       serverId: request.serverId,
       source: request.source,
@@ -91,8 +132,8 @@ export class FinishedRequestScanner {
   }
 }
 
-/** Curseur après annonce des demandes données. */
-export function advanceCursor(cursor: number, announced: FinishedRequest[]): number {
+/** Curseur après annonce des événements donnés. */
+export function advanceCursor(cursor: number, announced: GateEvent[]): number {
   return announced.reduce((max, request) => Math.max(max, request.eventMs), cursor);
 }
 
@@ -102,7 +143,18 @@ function oneLine(text: string, max: number): string {
 }
 
 /** Ligne de notification : une seule ligne, lisible telle quelle par l'agent. */
-export function formatEvent(request: FinishedRequest): string {
+export function formatEvent(event: GateEvent): string {
+  return event.kind === "question" ? formatQuestion(event) : formatFinished(event);
+}
+
+function formatQuestion(event: QuestionAsked): string {
+  return (
+    `[ssh-gate] ${event.serverId} — the user asks you to explain part of command ${event.commandIndex + 1}/${event.commandCount} of request ${event.id}: ` +
+    `${oneLine(event.statement, 1000)} — answer with answer_question, request_id ${event.id}, question_id ${event.questionId}`
+  );
+}
+
+function formatFinished(request: FinishedRequest): string {
   const total = request.commands.length;
   const stoppedAt = request.commands.findIndex((c) => c.status === "failed" || c.status === "interrupted");
   let outcome: string;
@@ -215,7 +267,7 @@ export function liveWatcherSince(dataDir: string, session: string): string | nul
 }
 
 /**
- * Mode veilleur local (`--watch <session>`). Une ligne sur stdout par demande terminée
+ * Mode veilleur local (`--watch <session>`). Une ligne sur stdout par événement
  * de la session : l'outil Monitor de l'hôte réveille l'agent à chaque ligne. Le journal
  * et les erreurs partent sur stderr. Une erreur de lecture se traduit par un réessai,
  * jamais par une sortie.
@@ -227,7 +279,7 @@ export async function runWatchMode(session: string | null): Promise<void> {
     throw new GateError(`No notification handoff for session ${session}: call enable_notifications in that MCP session first.`);
   }
 
-  const scanner = new FinishedRequestScanner(new RequestStore(handoff.dataDir), session);
+  const scanner = new RequestEventScanner(new RequestStore(handoff.dataDir), session);
   const since = new Date().toISOString();
   let cursor = handoff.cursor;
   let lastBeat = 0;
@@ -240,10 +292,10 @@ export async function runWatchMode(session: string | null): Promise<void> {
         writeJsonAtomic(watcherBeatPath(handoff.dataDir, session), { since, updatedAt: Date.now() });
         lastBeat = Date.now();
       }
-      const finished = scanner.since(cursor);
-      if (finished.length > 0) {
-        for (const request of finished) process.stdout.write(`${formatEvent(request)}\n`);
-        cursor = advanceCursor(cursor, finished);
+      const events = scanner.since(cursor);
+      if (events.length > 0) {
+        for (const event of events) process.stdout.write(`${formatEvent(event)}\n`);
+        cursor = advanceCursor(cursor, events);
         saveHandoff({ session, dataDir: handoff.dataDir, cursor });
       }
       backoff = SCAN_INTERVAL_MS;

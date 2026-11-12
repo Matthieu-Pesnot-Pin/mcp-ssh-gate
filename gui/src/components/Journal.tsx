@@ -4,6 +4,7 @@ import type { CommandRun, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { clock, plural, seconds } from '../format'
 import { CommandText } from './CommandText'
+import { ExplainableCommand } from './Explanations'
 
 function StatusIcon({ command }: { command: CommandRun }) {
   switch (command.status) {
@@ -29,25 +30,45 @@ function actor(request: GateRequest): string {
   return request.source === 'user' ? 'Toi' : 'Agent'
 }
 
-function CommandEntry({ request, command, defaultOpen }: { request: GateRequest; command: CommandRun; defaultOpen: boolean }) {
+interface EntryProps {
+  request: GateRequest
+  index: number
+  defaultOpen: boolean
+  onChanged: () => void
+  onError: (message: string) => void
+}
+
+function CommandEntry({ request, index, defaultOpen, onChanged, onError }: EntryProps) {
+  const command = request.commands[index]
   const [open, setOpen] = useState(defaultOpen)
   const ran = command.status !== 'skipped'
   const Chevron = open ? ChevronDown : ChevronRight
 
   return (
     <div className="entry">
-      <button className={`entry-head${open ? ' open' : ''}`} onClick={() => ran && setOpen(!open)} disabled={!ran} style={{ opacity: 1 }}>
+      <div
+        className={`entry-head${open ? ' open' : ''}${ran ? ' toggles' : ''}`}
+        role={ran ? 'button' : undefined}
+        tabIndex={ran ? 0 : undefined}
+        aria-expanded={ran ? open : undefined}
+        onClick={() => ran && setOpen(!open)}
+        onKeyDown={(event) => {
+          if (!ran || event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return
+          event.preventDefault()
+          setOpen(!open)
+        }}
+      >
         <span className="entry-actor">{actor(request)}</span>
         <span className="entry-time">{clock(command.startedAt ?? request.createdAt)}</span>
-        <span className={`entry-cmd${ran ? '' : ' dim'}`} title={open ? undefined : command.command}>
-          {ran ? <CommandText command={command.command} full={open} /> : command.command}
-        </span>
+        <div className={`entry-cmd${ran ? '' : ' dim'}`} title={open ? undefined : command.command}>
+          {!ran ? command.command : open ? <ExplainableCommand request={request} commandIndex={index} onChanged={onChanged} onError={onError} /> : <CommandText command={command.command} />}
+        </div>
         <span className="entry-status">
           {statusText(command)}
           <StatusIcon command={command} />
         </span>
         {ran ? <Chevron size={18} className="status-idle" /> : <span />}
-      </button>
+      </div>
       {command.original !== null && <div className="entry-note">Modifiée par toi — l'agent proposait : {command.original}</div>}
       {open && (
         <div className="output-box">
@@ -119,12 +140,12 @@ function ShareRow({ request, onShared, onError }: { request: GateRequest; onShar
 
 interface Props {
   requests: GateRequest[]
-  onShared: () => void
+  onChanged: () => void
   onError: (message: string) => void
 }
 
 /** Historique du serveur : les demandes terminées, les plus anciennes en haut. */
-export function Journal({ requests, onShared, onError }: Props) {
+export function Journal({ requests, onChanged, onError }: Props) {
   if (requests.length === 0) {
     return <div className="empty-journal">Aucune commande exécutée sur ce serveur pour l'instant.</div>
   }
@@ -140,8 +161,10 @@ export function Journal({ requests, onShared, onError }: Props) {
               <CommandEntry
                 key={`${request.id}:${index}`}
                 request={request}
-                command={command}
+                index={index}
                 defaultOpen={request.id === latestId && command.status !== 'skipped'}
+                onChanged={onChanged}
+                onError={onError}
               />
             ))}
             {(request.note || request.error) && (
@@ -150,7 +173,7 @@ export function Journal({ requests, onShared, onError }: Props) {
                 {request.note && <div>Note pour l'agent : {request.note}</div>}
               </div>
             )}
-            {request.source === 'user' && <ShareRow request={request} onShared={onShared} onError={onError} />}
+            {request.source === 'user' && <ShareRow request={request} onShared={onChanged} onError={onError} />}
           </div>
         )
       })}

@@ -192,6 +192,14 @@ app.put("/api/requests/:id/commands/:index", handle(async (c) => executor.editCo
 app.delete("/api/requests/:id/commands/:index", handle((c) => executor.removeCommand(c.req.param("id")!, commandIndex(c))));
 app.post("/api/requests/:id/approve", handle(async (c) => executor.approve(c.req.param("id")!, (await readBody(c))?.note)));
 app.post("/api/requests/:id/share", handle((c) => executor.share(c.req.param("id")!)));
+app.post(
+  "/api/requests/:id/questions",
+  handle(async (c) => {
+    const body = await readBody(c);
+    return executor.askQuestion(c.req.param("id")!, body?.commandIndex, body?.statement);
+  })
+);
+app.delete("/api/requests/:id/questions/:questionId", handle((c) => executor.cancelQuestion(c.req.param("id")!, c.req.param("questionId")!)));
 app.post("/api/requests/:id/refuse", handle(async (c) => executor.refuse(c.req.param("id")!, (await readBody(c))?.note)));
 app.post(
   "/api/requests/:id/interrupt",

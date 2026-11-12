@@ -46,8 +46,6 @@ interface Piece {
   text: string
   kind: Kind | null
   children?: Piece[]
-  /** Saut de ligne suivi d'un espace vertical, entre deux instructions séparées par ;. */
-  gap?: boolean
 }
 
 function commandKind(word: string): Kind {
@@ -130,41 +128,60 @@ function isBlank(piece: Piece): boolean {
   return piece.kind === null && !piece.children && !/\S/.test(piece.text)
 }
 
+/** Instruction d'une commande : ses morceaux, ; final compris, et son texte sans ce ;. */
+interface Statement {
+  pieces: Piece[]
+  text: string
+}
+
 /**
- * Insère les sauts de ligne du mode "auto" : avant chaque && et ||, décalés ;
- * après chaque ; (sauf \;), qui repart au bord après un espace vertical ; après un \ suivi d'un retour à
- * la ligne, décalé. Seuls les opérateurs de premier niveau comptent : ceux d'une
- * chaîne ou d'une substitution de commande sont imbriqués et restent en place.
+ * Découpe une commande en instructions aux ; de premier niveau : un \; (find -exec)
+ * ou un ; entre guillemets ne sépare rien.
+ */
+function splitStatements(pieces: Piece[]): Statement[] {
+  const statements: Statement[] = []
+  let current: Piece[] = []
+  const close = (separated: boolean) => {
+    while (current.length > 0 && isBlank(current[current.length - 1])) current.pop()
+    if (current.length === 0) return
+    const body = separated ? current.slice(0, -1) : current
+    statements.push({ pieces: current, text: body.map(pieceText).join('').trim() })
+    current = []
+  }
+  pieces.forEach((piece, index) => {
+    if (current.length === 0 && isBlank(piece)) return
+    current.push(piece)
+    const separator = piece.kind === 'op' && pieceText(piece) === ';' && (index === 0 || pieceText(pieces[index - 1]) !== '\\')
+    if (separator) close(true)
+  })
+  close(false)
+  return statements
+}
+
+/**
+ * Insère les sauts de ligne du mode "auto" dans une instruction : avant chaque && et ||,
+ * décalés ; après un \ suivi d'un retour à la ligne, décalé. Seuls les opérateurs de
+ * premier niveau comptent : ceux d'une chaîne ou d'une substitution de commande sont
+ * imbriqués et restent en place.
  */
 function breakLines(pieces: Piece[]): Piece[] {
   const out: Piece[] = []
   const dropTrailingBlanks = () => {
     while (out.length > 0 && isBlank(out[out.length - 1])) out.pop()
   }
-  const skipBlanks = (from: number) => {
-    let next = from
-    while (next < pieces.length && isBlank(pieces[next])) next += 1
-    return next
-  }
 
   for (let i = 0; i < pieces.length; i += 1) {
     const piece = pieces[i]
     const text = piece.kind === 'op' ? pieceText(piece) : ''
-    const previous = out.length > 0 ? pieceText(out[out.length - 1]) : ''
 
     if (text === '&&' || text === '||') {
       dropTrailingBlanks()
       out.push({ text: `\n${CONTINUATION_INDENT}`, kind: null }, piece)
       continue
     }
-    const continuation = text === '\\' && i + 1 < pieces.length && isBlank(pieces[i + 1]) && pieces[i + 1].text.includes('\n')
-    if ((text === ';' && previous !== '\\') || continuation) {
-      out.push(piece)
-      const next = skipBlanks(i + 1)
-      if (next < pieces.length) {
-        out.push(text === ';' ? { text: '', kind: null, gap: true } : { text: `\n${CONTINUATION_INDENT}`, kind: null })
-      }
-      i = next - 1
+    if (text === '\\' && i + 1 < pieces.length && isBlank(pieces[i + 1]) && pieces[i + 1].text.includes('\n')) {
+      out.push(piece, { text: `\n${CONTINUATION_INDENT}`, kind: null })
+      i += 1
       continue
     }
     out.push(piece)
@@ -176,7 +193,6 @@ function breakLines(pieces: Piece[]): Piece[] {
 function render(pieces: Piece[], prefix: string): ReactNode[] {
   return pieces.map((piece, index) => {
     const key = `${prefix}${index}`
-    if (piece.gap) return <span key={key} className="hl-gap" />
     const content = piece.children ? render(piece.children, `${key}.`) : piece.text
     return piece.kind ? (
       <span key={key} className={`tk-${piece.kind}`}>
@@ -188,18 +204,31 @@ function render(pieces: Piece[], prefix: string): ReactNode[] {
   })
 }
 
+/** Instructions d'une commande, colorées et coupées selon le mode "auto", avec leur texte. */
+export function commandStatements(command: string): { text: string; nodes: ReactNode[] }[] {
+  return splitStatements(tokenizeCommand(command)).map((statement, index) => ({
+    text: statement.text,
+    nodes: render(breakLines(statement.pieces), `${index}.`),
+  }))
+}
+
 /**
  * Commande colorée selon la palette active (attribut data-palette d'un ancêtre).
  * `full` signale une commande affichée en entier : le mode de coupure des réglages,
- * ou `lineBreaks` s'il est fourni, s'y applique. Le conteneur doit conserver les
- * sauts de ligne (white-space: pre-wrap).
+ * ou `lineBreaks` s'il est fourni, s'y applique. En mode "auto", chaque instruction
+ * occupe son propre bloc. Le conteneur doit conserver les sauts de ligne
+ * (white-space: pre-wrap).
  */
 export function CommandText({ command, full = false, lineBreaks }: { command: string; full?: boolean; lineBreaks?: LineBreakMode }) {
   const configured = useContext(LineBreakContext)
   const breaking = full && (lineBreaks ?? configured) === 'auto'
   const nodes = useMemo(() => {
-    const pieces = tokenizeCommand(command)
-    return render(breaking ? breakLines(pieces) : pieces, '')
+    if (!breaking) return render(tokenizeCommand(command), '')
+    return commandStatements(command).map((statement, index) => (
+      <span key={index} className="hl-stmt">
+        {statement.nodes}
+      </span>
+    ))
   }, [command, breaking])
   return <span className="hl">{nodes}</span>
 }

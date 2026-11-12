@@ -1,4 +1,5 @@
-import { isFinalStatus, type GateRequest, type RequestStatus, type ServerView } from "../../shared/model.js";
+import { randomBytes } from "node:crypto";
+import { MAX_STATEMENT_LENGTH, isFinalStatus, type GateRequest, type RequestStatus, type ServerView } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import type { RequestStore } from "./request-store.js";
 import { toPublic, type ServerInput, type ServerStore, type StoredServer } from "./server-store.js";
@@ -146,6 +147,7 @@ export class Executor {
       const proposed = entry.original ?? entry.command;
       entry.command = text;
       entry.original = text === proposed ? null : proposed;
+      draft.questions = draft.questions.filter((question) => question.commandIndex !== index);
     });
   }
 
@@ -155,6 +157,36 @@ export class Executor {
       if (!draft.commands[index]) throw new GateError(`Commande ${index + 1} introuvable.`);
       if (draft.commands.length === 1) throw new GateError("Une demande garde au moins une commande : refuse-la plutôt.");
       draft.commands.splice(index, 1);
+      draft.questions = draft.questions
+        .filter((question) => question.commandIndex !== index)
+        .map((question) => (question.commandIndex > index ? { ...question, commandIndex: question.commandIndex - 1 } : question));
+    });
+  }
+
+  /** Demande à l'agent d'expliquer une instruction d'une commande. */
+  askQuestion(requestId: string, commandIndex: unknown, statement: unknown): GateRequest {
+    const index = Number(commandIndex);
+    const text = typeof statement === "string" ? statement.trim() : "";
+    if (!text) throw new GateError("L'instruction à expliquer est vide.");
+    if (text.length > MAX_STATEMENT_LENGTH) throw new GateError(`L'instruction dépasse ${MAX_STATEMENT_LENGTH} caractères.`);
+    return this.requests.update(requestId, (draft) => {
+      const entry = Number.isInteger(index) ? draft.commands[index] : undefined;
+      if (!entry) throw new GateError(`Commande ${index + 1} introuvable.`);
+      if (!entry.command.includes(text)) throw new GateError("Cette instruction ne fait pas partie de la commande.");
+      if (draft.questions.some((question) => question.commandIndex === index && question.statement === text)) {
+        throw new GateError("Une explication a déjà été demandée pour cette instruction.");
+      }
+      draft.questions.push({ id: `q_${randomBytes(4).toString("hex")}`, commandIndex: index, statement: text, askedAt: now(), answer: null, answeredAt: null });
+    });
+  }
+
+  /** Retire une question à laquelle l'agent n'a pas encore répondu. */
+  cancelQuestion(requestId: string, questionId: string): GateRequest {
+    return this.requests.update(requestId, (draft) => {
+      const question = draft.questions.find((q) => q.id === questionId);
+      if (!question) throw new GateError("Cette question n'existe plus.");
+      if (question.answer !== null) throw new GateError("L'agent a déjà répondu à cette question.");
+      draft.questions = draft.questions.filter((q) => q.id !== questionId);
     });
   }
 

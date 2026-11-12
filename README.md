@@ -159,7 +159,8 @@ Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un 
 | `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
 | `submit_commands` | Soumet 1 à 20 commandes avec une explication. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
 | `wait_for_result` | Attend ta décision et la fin de l'exécution, puis renvoie le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Rend la main au bout de `timeout_seconds` (300 par défaut, 1800 au plus) : il suffit de le rappeler. |
-| `enable_notifications` | Active les notifications de fin de demande et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
+| `enable_notifications` | Active les notifications (fin de demande, commande envoyée par toi, demande d'explication) et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
+| `answer_question` | Répond à une demande d'explication posée depuis l'interface sur une instruction ; la réponse s'affiche sous l'instruction. |
 | `wait_for_notifications` | Réservé au veilleur du gateway, qui l'appelle en boucle ; l'agent ne l'appelle pas. |
 | `cancel_request` | Retire une demande pas encore validée. |
 | `get_history` | Dernières demandes d'un serveur, y compris les commandes que tu as tapées toi-même. |
@@ -193,6 +194,12 @@ Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un
 [ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id 0mwb2k1qa-7f03c2
 ```
 
+Une **demande d'explication** posée depuis l'interface est annoncée à la session qui a soumis la commande ; pour une commande que tu as tapée toi-même, à toutes les sessions. L'agent répond avec `answer_question` ; tant qu'il n'a pas répondu, tu peux retirer la question.
+
+```
+[ssh-gate] pxp-dev — the user asks you to explain part of command 1/2 of request 0mwb2k1qa-7f03c2: df -h / — answer with answer_question, request_id 0mwb2k1qa-7f03c2, question_id q_3fa2b1c0
+```
+
 ## Notes du serveur
 
 Chaque serveur porte des notes en texte libre : dossier des sites, gestion des applis (PM2, systemd…), emplacement des configurations, règles à respecter. L'agent les reçoit avec `list_servers` avant d'intervenir et les complète avec `update_server_notes` quand il découvre quelque chose d'utile ; tu les lis et les modifies dans l'onglet **Notes** du serveur.
@@ -216,6 +223,7 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
 - **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
 - **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Le bouton **Envoyer à l'agent**, sous le résultat, le notifie de cette commande.
+- **Expliquer une instruction** : dans la demande en attente et le journal déplié, en mode *Sauts de ligne automatiques*, chaque instruction (partie de commande délimitée par `;`) affiche au survol un bouton **Expliquer** (toujours visible sur téléphone). La question part à l'agent par les notifications ; sa réponse s'affiche sous l'instruction, et la croix la masque. En mode *Brutes*, il n'y a pas de bouton : les explications déjà reçues suivent la commande.
 - **Coloration des commandes** dans la demande en attente, l'exécution et le journal : nom de commande, options, chaînes, variables, opérateurs, et en rouge les commandes sensibles (`sudo`, `rm`, `dd`, `chmod`, `kill`, `shutdown`…). Le champ de modification reste sans couleur.
 - **Réglages** (engrenage en bas de la barre latérale), appliqués immédiatement et valables pour tous les navigateurs ; ils sont enregistrés dans `DATA_DIR/settings.json` :
   - **Coloration des commandes** : Sobre (par défaut), Contrastée, Vive, Minimale ou Aucune.

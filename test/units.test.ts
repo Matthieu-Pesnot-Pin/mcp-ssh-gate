@@ -11,7 +11,7 @@ import { ServerStore } from "../src/core/server-store.js";
 import { formatRequest } from "../src/tools/format.js";
 import { runSetupMcp } from "../src/cli/setup-mcp.js";
 import { callTool } from "../src/tools/tools.js";
-import { FinishedRequestScanner } from "../src/core/watch.js";
+import { RequestEventScanner } from "../src/core/watch.js";
 import { TerminalTickets } from "../src/core/terminal-tickets.js";
 import { SettingsStore } from "../src/core/settings-store.js";
 
@@ -64,7 +64,7 @@ test("server notes: the agent appends or replaces, a stale user edit is refused"
   const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dir);
   servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
-  const ctx = { servers, requests, ensureGui: () => {}, guiUrl: () => null, reconnectGui: async () => ({ content: [] }), sessionId: "ses_test", dataDir: dir, watchCommand: "", finished: new FinishedRequestScanner(requests, "ses_test") };
+  const ctx = { servers, requests, ensureGui: () => {}, guiUrl: () => null, reconnectGui: async () => ({ content: [] }), sessionId: "ses_test", dataDir: dir, watchCommand: "", events: new RequestEventScanner(requests, "ses_test") };
   const read = async (name: string, args: unknown = {}) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
 
   assert.match(await read("list_servers"), /Notes: none yet/);

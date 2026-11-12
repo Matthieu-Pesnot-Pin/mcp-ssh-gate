@@ -4,6 +4,7 @@ import type { CommandRun, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { clock, elapsed, plural, seconds } from '../format'
 import { CommandText } from './CommandText'
+import { ExplainableCommand } from './Explanations'
 
 interface RequestCardProps {
   request: GateRequest
@@ -92,7 +93,9 @@ export function RequestCard({ request, queued, busy, onDone, onError }: RequestC
               {editing === index ? (
                 <textarea ref={editRef} className="cmd-edit" rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onEditKey} />
               ) : (
-                <div className="cmd-text"><CommandText command={command.command} full /></div>
+                <div className="cmd-text">
+                  <ExplainableCommand request={request} commandIndex={index} onChanged={onDone} onError={onError} />
+                </div>
               )}
               {command.original !== null && editing !== index && <div className="cmd-original">Modifiée par toi — l'agent proposait : {command.original}</div>}
             </div>

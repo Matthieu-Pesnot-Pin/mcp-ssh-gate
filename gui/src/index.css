@@ -1781,8 +1781,154 @@ p {
   margin-top: 8px;
 }
 
-/* Espace entre deux instructions séparées par ; : le bloc force le retour à la ligne. */
-.hl-gap {
+/* Une instruction par bloc ; un léger espace sépare deux instructions séparées par ;. */
+.hl-stmt {
   display: block;
-  height: 0.6em;
+}
+
+.hl-stmt + .hl-stmt {
+  margin-top: 0.6em;
+}
+
+/* Entrée du journal dépliable au clic ou au clavier. */
+.entry-head.toggles {
+  cursor: pointer;
+}
+
+.entry-cmd {
+  min-width: 0;
+}
+
+/* Instructions d'une commande affichée en entier, chacune avec son bouton Expliquer. */
+.stmts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  white-space: normal;
+}
+
+.stmt-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: -3px -6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+
+.stmt-line:hover {
+  background: rgba(139, 151, 255, 0.08);
+}
+
+.stmt-code {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stmt-explain {
+  visibility: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-soft);
+}
+
+.stmt-explain:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.stmt-line:hover .stmt-explain,
+.stmt-explain:focus-visible {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .stmt-explain {
+    visibility: visible;
+  }
+}
+
+/* Question envoyée à l'agent, ou sa réponse. */
+.explain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.explain-panel {
+  margin-top: 8px;
+  padding: 10px 14px 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-soft);
+  white-space: normal;
+  cursor: auto;
+}
+
+.explain-panel.waiting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-left-color: var(--idle);
+  color: var(--muted);
+}
+
+.explain-icon {
+  flex-shrink: 0;
+  color: var(--accent-soft);
+}
+
+.explain-wait {
+  flex: 1;
+  min-width: 0;
+}
+
+.explain-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.explain-hide {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+}
+
+.explain-statement {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+
+.explain-text {
+  white-space: pre-wrap;
 }

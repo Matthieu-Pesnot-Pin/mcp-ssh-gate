@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { MAX_COMMANDS_PER_REQUEST, isFinalStatus } from "../../shared/model.js";
+import { MAX_ANSWER_LENGTH, MAX_COMMANDS_PER_REQUEST, isFinalStatus } from "../../shared/model.js";
 import { GateError } from "../core/errors.js";
 import type { RequestStore } from "../core/request-store.js";
 import type { ServerStore, StoredServer } from "../core/server-store.js";
-import { MONITOR_TIMEOUT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, type FinishedRequestScanner } from "../core/watch.js";
+import { MONITOR_TIMEOUT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, type RequestEventScanner } from "../core/watch.js";
 import { formatRequest } from "./format.js";
 
 export interface ToolContext {
@@ -20,8 +20,8 @@ export interface ToolContext {
   dataDir: string;
   /** Commande que l'outil Monitor de l'hôte lance pour surveiller cette session. */
   watchCommand: string;
-  /** Demandes terminées de cette session, lues par l'outil d'attente du veilleur du gateway. */
-  finished: FinishedRequestScanner;
+  /** Événements de cette session, lus par l'outil d'attente du veilleur du gateway. */
+  events: RequestEventScanner;
 }
 
 export const WATCH_ARG = "_gateway_watch";
@@ -41,7 +41,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "enable_notifications",
     description:
-      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), and when the user sends you a command they ran themselves, without blocking on wait_for_result. " +
+      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), when the user sends you a command they ran themselves, and when the user asks you to explain a command, without blocking on wait_for_result. " +
       "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
       "Call it once at the start of the session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {
@@ -59,7 +59,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       "Reserved for the notification watcher that the mcp-http-gateway relay runs on the agent's machine: do not call it yourself. " +
       "To be notified, call enable_notifications; to read the outcome of a request, call wait_for_result. " +
-      "Blocks until a request submitted by this session is finished after the cursor, or until the timeout, and returns one line per finished request with the next cursor.",
+      "Blocks until an event of this session happens after the cursor (a request finished, a command shared by the user, a question from the user), or until the timeout, and returns one line per event with the next cursor.",
     inputSchema: {
       type: "object",
       properties: {
@@ -137,6 +137,23 @@ export const TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: "answer_question",
+    description:
+      "Answer a question the user asked in the GUI about a command: the notification gives the request_id, the question_id and the statement to explain. " +
+      "Explain in the user's language what the statement does, in a few short sentences: what each part does, in which order, and what the user will see. " +
+      "Point out anything risky or surprising: destructive effects, errors hidden by 2>/dev/null or a pipe, operator precedence. Plain text without Markdown; line breaks are kept. " +
+      "The answer is shown under the statement in the GUI.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string", description: "Request id given in the notification." },
+        question_id: { type: "string", description: "Question id given in the notification." },
+        answer: { type: "string", description: `The explanation, at most ${MAX_ANSWER_LENGTH} characters.` },
+      },
+      required: ["request_id", "question_id", "answer"],
+    },
+  },
+  {
     name: "cancel_request",
     description: "Withdraw a request that the user has not approved yet. A request that is already running can only be interrupted by the user.",
     inputSchema: {
@@ -175,6 +192,11 @@ const WaitArgs = z.object({
   timeout_seconds: z.number().positive().max(MAX_WAIT_SECONDS).optional(),
 });
 const RequestArgs = z.object({ request_id: z.string().min(1) });
+const AnswerArgs = z.object({
+  request_id: z.string().min(1),
+  question_id: z.string().min(1),
+  answer: z.string().trim().min(1, "answer must not be empty").max(MAX_ANSWER_LENGTH),
+});
 const NotesArgs = z.object({
   server: z.string().min(1),
   notes: z.string(),
@@ -276,7 +298,7 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
           tool: "wait_for_notifications",
           arguments: {},
           cursor: String(Date.now()),
-          description: "Finished ssh-gate requests",
+          description: "ssh-gate requests and questions",
         },
       },
     };
@@ -300,12 +322,14 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
       "",
       "Last step — call the Monitor tool now, with exactly these arguments:",
       `  command:     ${ctx.watchCommand}`,
-      "  description: Finished ssh-gate requests",
+      "  description: ssh-gate requests and questions",
       `  timeout_ms:  ${MONITOR_TIMEOUT_MS}`,
       "",
       "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request you submitted",
       "announces itself when its commands have all run, or when the user refused or interrupted it — one line per",
       "request. Read the outcome with wait_for_result, which then returns immediately.",
+      "When the user asks you to explain a command from the GUI, a line gives the statement, the request_id and the",
+      "question_id: answer it with answer_question.",
       "",
       "The host stops every monitor after 30 minutes at most. Each time it tells you this watcher expired, call",
       "Monitor again right away with the same arguments — do not call enable_notifications again. A request that",
@@ -336,17 +360,17 @@ async function waitForResult(ctx: ToolContext, args: unknown, signal?: AbortSign
   }
 }
 
-/** Outil d'attente du veilleur du gateway : une ligne par demande terminée après le curseur. */
+/** Outil d'attente du veilleur du gateway : une ligne par événement après le curseur. */
 async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const { cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
   let cursor = rawCursor === undefined ? Date.now() : Number(rawCursor);
   const deadline = Date.now() + (timeout_seconds ?? DEFAULT_NOTIFICATION_WAIT_SECONDS) * 1000;
 
   for (;;) {
-    const finished = ctx.finished.since(cursor);
-    if (finished.length > 0 || Date.now() >= deadline || signal?.aborted) {
-      cursor = advanceCursor(cursor, finished);
-      const lines = finished.map(formatEvent);
+    const events = ctx.events.since(cursor);
+    if (events.length > 0 || Date.now() >= deadline || signal?.aborted) {
+      cursor = advanceCursor(cursor, events);
+      const lines = events.map(formatEvent);
       return {
         content: [{ type: "text", text: JSON.stringify({ received: lines.length, cursor: String(cursor), lines }) }],
         _meta: { [EVENTS_META]: { cursor: String(cursor), lines } },
@@ -354,6 +378,18 @@ async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: Ab
     }
     await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())), signal);
   }
+}
+
+function answerQuestion(ctx: ToolContext, args: unknown): CallToolResult {
+  const { request_id, question_id, answer } = parse(AnswerArgs, args);
+  ctx.requests.update(request_id, (draft) => {
+    const question = draft.questions.find((q) => q.id === question_id);
+    if (!question) throw new GateError(`Question ${question_id} does not exist on request ${request_id}: the user may have withdrawn it.`);
+    if (question.answer !== null) throw new GateError(`Question ${question_id} has already been answered.`);
+    question.answer = answer;
+    question.answeredAt = new Date().toISOString();
+  });
+  return text(`Answer saved: the user sees it under the statement in the GUI.`);
 }
 
 function cancelRequest(ctx: ToolContext, args: unknown): CallToolResult {
@@ -392,6 +428,8 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown, si
         return submitCommands(ctx, args);
       case "wait_for_result":
         return await waitForResult(ctx, args, signal);
+      case "answer_question":
+        return answerQuestion(ctx, args);
       case "cancel_request":
         return cancelRequest(ctx, args);
       case "get_history":

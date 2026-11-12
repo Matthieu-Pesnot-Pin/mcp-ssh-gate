@@ -48,7 +48,27 @@ export interface GateRequest {
   /** Répertoire courant du shell à la fin de l'exécution. */
   cwd: string | null;
   commands: CommandRun[];
+  /** Questions de l'utilisateur sur des instructions de ces commandes. */
+  questions: CommandQuestion[];
 }
+
+/**
+ * Demande d'explication posée depuis l'interface sur une instruction (partie d'une
+ * commande délimitée par ;). Un agent y répond avec l'outil answer_question.
+ */
+export interface CommandQuestion {
+  id: string;
+  /** Index de la commande dans la demande. */
+  commandIndex: number;
+  /** Instruction concernée, telle qu'elle est écrite dans la commande, sans le ; final. */
+  statement: string;
+  askedAt: string;
+  answer: string | null;
+  answeredAt: string | null;
+}
+
+export const MAX_STATEMENT_LENGTH = 4_000;
+export const MAX_ANSWER_LENGTH = 6_000;
 
 export interface ServerPublic {
   id: string;

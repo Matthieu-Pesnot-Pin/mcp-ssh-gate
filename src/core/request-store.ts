@@ -40,6 +40,12 @@ function normalizeCommands(commands: string[]): string[] {
   });
 }
 
+/** Lit un fichier de demande ; une demande enregistrée avant les questions n'en a aucune. */
+export function readRequestFile(file: string): GateRequest {
+  const request = readJson<GateRequest>(file);
+  return { ...request, questions: request.questions ?? [] };
+}
+
 /**
  * Demandes d'exécution : un fichier JSON par demande dans
  * `<DATA_DIR>/requests/<serveur>/`. Les processus MCP créent les demandes,
@@ -69,6 +75,7 @@ export class RequestStore {
       sharedAt: null,
       error: null,
       cwd: null,
+      questions: [],
       commands: commands.map((command) => ({
         command,
         original: null,
@@ -85,7 +92,7 @@ export class RequestStore {
   }
 
   get(id: string): GateRequest {
-    return readJson<GateRequest>(this.locate(id));
+    return readRequestFile(this.locate(id));
   }
 
   /** Demandes d'un serveur, les plus anciennes d'abord ; `limit` garde les plus récentes. */
@@ -97,7 +104,7 @@ export class RequestStore {
       .filter((name) => name.endsWith(".json"))
       .sort();
     if (limit !== undefined) names = names.slice(-limit);
-    return names.map((name) => readJson<GateRequest>(path.join(dir, name)));
+    return names.map((name) => readRequestFile(path.join(dir, name)));
   }
 
   /** Demandes non terminées de tous les serveurs. */
@@ -112,7 +119,7 @@ export class RequestStore {
   update(id: string, fn: (draft: GateRequest) => void): GateRequest {
     const file = this.locate(id);
     return withFileLock(`${file}.lock`, `Request ${id}`, () => {
-      const draft = readJson<GateRequest>(file);
+      const draft = readRequestFile(file);
       fn(draft);
       writeJsonAtomic(file, draft);
       return draft;
