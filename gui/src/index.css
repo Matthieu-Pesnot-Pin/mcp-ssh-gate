@@ -358,6 +358,20 @@ p {
   text-overflow: ellipsis;
 }
 
+/* Entrée dépliée : la commande s'affiche en entier, sur autant de lignes que nécessaire. */
+.entry-head.open {
+  align-items: start;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  line-height: 20px;
+}
+
+.entry-head.open .entry-cmd {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+}
+
 .entry-cmd.dim {
   color: var(--faint);
 }
@@ -1756,4 +1770,13 @@ p {
   align-self: center;
   font-size: 12px;
   color: var(--faint);
+}
+
+.palette-sample.multiline {
+  white-space: pre;
+  overflow: visible;
+}
+
+.settings-section-next {
+  margin-top: 8px;
 }

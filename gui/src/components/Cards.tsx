@@ -92,7 +92,7 @@ export function RequestCard({ request, queued, busy, onDone, onError }: RequestC
               {editing === index ? (
                 <textarea ref={editRef} className="cmd-edit" rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onEditKey} />
               ) : (
-                <div className="cmd-text"><CommandText command={command.command} /></div>
+                <div className="cmd-text"><CommandText command={command.command} full /></div>
               )}
               {command.original !== null && editing !== index && <div className="cmd-original">Modifiée par toi — l'agent proposait : {command.original}</div>}
             </div>

@@ -1,6 +1,13 @@
-import { useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useMemo, type ReactNode } from 'react'
 import Prism from 'prismjs'
 import 'prismjs/components/prism-bash'
+import { DEFAULT_LINE_BREAK_MODE, type LineBreakMode } from '@shared/model'
+
+/** Mode de coupure des commandes affichées en entier, fourni par les réglages. */
+export const LineBreakContext = createContext<LineBreakMode>(DEFAULT_LINE_BREAK_MODE)
+
+/** Décalage des lignes qui prolongent la précédente (&&, ||, \). */
+const CONTINUATION_INDENT = '  '
 
 type Kind = 'cmd' | 'danger' | 'opt' | 'str' | 'var' | 'op' | 'num' | 'comment'
 
@@ -67,8 +74,11 @@ export function tokenizeCommand(command: string): Piece[] {
   const pieces: Piece[] = []
   let expectCommand = true
   let skipValue = false
+  let previous = ''
 
   for (const token of Prism.tokenize(command, Prism.languages.bash)) {
+    const escaped = previous === '\\'
+    previous = typeof token === 'string' ? token : textOf(token.content).trim()
     if (typeof token === 'string') {
       for (const part of token.split(/(\s+)/)) {
         if (!part) continue
@@ -96,7 +106,7 @@ export function tokenizeCommand(command: string): Piece[] {
     }
 
     pieces.push({ text: '', kind: KIND_OF_TYPE[token.type] ?? null, children: nested(token.content) })
-    if (SEPARATORS.has(text)) {
+    if (SEPARATORS.has(text) && !escaped) {
       expectCommand = true
       skipValue = false
     } else if (token.type === 'parameter') {
@@ -108,6 +118,55 @@ export function tokenizeCommand(command: string): Piece[] {
     }
   }
   return pieces
+}
+
+function pieceText(piece: Piece): string {
+  return piece.children ? piece.children.map(pieceText).join('') : piece.text
+}
+
+function isBlank(piece: Piece): boolean {
+  return piece.kind === null && !piece.children && !/\S/.test(piece.text)
+}
+
+/**
+ * Insère les sauts de ligne du mode "auto" : avant chaque && et ||, décalés ;
+ * après chaque ; (sauf \;), qui repart au bord ; après un \ suivi d'un retour à
+ * la ligne, décalé. Seuls les opérateurs de premier niveau comptent : ceux d'une
+ * chaîne ou d'une substitution de commande sont imbriqués et restent en place.
+ */
+function breakLines(pieces: Piece[]): Piece[] {
+  const out: Piece[] = []
+  const dropTrailingBlanks = () => {
+    while (out.length > 0 && isBlank(out[out.length - 1])) out.pop()
+  }
+  const skipBlanks = (from: number) => {
+    let next = from
+    while (next < pieces.length && isBlank(pieces[next])) next += 1
+    return next
+  }
+
+  for (let i = 0; i < pieces.length; i += 1) {
+    const piece = pieces[i]
+    const text = piece.kind === 'op' ? pieceText(piece) : ''
+    const previous = out.length > 0 ? pieceText(out[out.length - 1]) : ''
+
+    if (text === '&&' || text === '||') {
+      dropTrailingBlanks()
+      out.push({ text: `\n${CONTINUATION_INDENT}`, kind: null }, piece)
+      continue
+    }
+    const continuation = text === '\\' && i + 1 < pieces.length && isBlank(pieces[i + 1]) && pieces[i + 1].text.includes('\n')
+    if ((text === ';' && previous !== '\\') || continuation) {
+      out.push(piece)
+      const next = skipBlanks(i + 1)
+      if (next < pieces.length) out.push({ text: text === ';' ? '\n' : `\n${CONTINUATION_INDENT}`, kind: null })
+      i = next - 1
+      continue
+    }
+    out.push(piece)
+  }
+  dropTrailingBlanks()
+  return out
 }
 
 function render(pieces: Piece[], prefix: string): ReactNode[] {
@@ -124,8 +183,18 @@ function render(pieces: Piece[], prefix: string): ReactNode[] {
   })
 }
 
-/** Commande colorée selon la palette active (attribut data-palette d'un ancêtre). */
-export function CommandText({ command }: { command: string }) {
-  const nodes = useMemo(() => render(tokenizeCommand(command), ''), [command])
+/**
+ * Commande colorée selon la palette active (attribut data-palette d'un ancêtre).
+ * `full` signale une commande affichée en entier : le mode de coupure des réglages,
+ * ou `lineBreaks` s'il est fourni, s'y applique. Le conteneur doit conserver les
+ * sauts de ligne (white-space: pre-wrap).
+ */
+export function CommandText({ command, full = false, lineBreaks }: { command: string; full?: boolean; lineBreaks?: LineBreakMode }) {
+  const configured = useContext(LineBreakContext)
+  const breaking = full && (lineBreaks ?? configured) === 'auto'
+  const nodes = useMemo(() => {
+    const pieces = tokenizeCommand(command)
+    return render(breaking ? breakLines(pieces) : pieces, '')
+  }, [command, breaking])
   return <span className="hl">{nodes}</span>
 }

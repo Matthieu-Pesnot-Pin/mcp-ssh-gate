@@ -36,11 +36,11 @@ function CommandEntry({ request, command, defaultOpen }: { request: GateRequest;
 
   return (
     <div className="entry">
-      <button className="entry-head" onClick={() => ran && setOpen(!open)} disabled={!ran} style={{ opacity: 1 }}>
+      <button className={`entry-head${open ? ' open' : ''}`} onClick={() => ran && setOpen(!open)} disabled={!ran} style={{ opacity: 1 }}>
         <span className="entry-actor">{actor(request)}</span>
         <span className="entry-time">{clock(command.startedAt ?? request.createdAt)}</span>
-        <span className={`entry-cmd${ran ? '' : ' dim'}`} title={command.command}>
-          {ran ? <CommandText command={command.command} /> : command.command}
+        <span className={`entry-cmd${ran ? '' : ' dim'}`} title={open ? undefined : command.command}>
+          {ran ? <CommandText command={command.command} full={open} /> : command.command}
         </span>
         <span className="entry-status">
           {statusText(command)}

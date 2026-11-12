@@ -1,12 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DEFAULT_HIGHLIGHT_PALETTE, HIGHLIGHT_PALETTES, type GuiSettings, type HighlightPalette } from "../../shared/model.js";
+import {
+  DEFAULT_HIGHLIGHT_PALETTE,
+  DEFAULT_LINE_BREAK_MODE,
+  HIGHLIGHT_PALETTES,
+  LINE_BREAK_MODES,
+  type GuiSettings,
+} from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import { readJson, withFileLock, writeJsonAtomic } from "./files.js";
 
-function isPalette(value: unknown): value is HighlightPalette {
-  return HIGHLIGHT_PALETTES.includes(value as HighlightPalette);
+interface SettingSpec<T extends string> {
+  allowed: readonly T[];
+  fallback: T;
+  label: string;
 }
+
+const SPECS: { [K in keyof GuiSettings]: SettingSpec<GuiSettings[K]> } = {
+  palette: { allowed: HIGHLIGHT_PALETTES, fallback: DEFAULT_HIGHLIGHT_PALETTE, label: "Palette inconnue" },
+  lineBreaks: { allowed: LINE_BREAK_MODES, fallback: DEFAULT_LINE_BREAK_MODE, label: "Mode de coupure inconnu" },
+};
 
 /** Réglages de l'interface : `<DATA_DIR>/settings.json`. Un réglage absent prend sa valeur par défaut. */
 export class SettingsStore {
@@ -19,18 +32,26 @@ export class SettingsStore {
   }
 
   get(): GuiSettings {
-    const stored = fs.existsSync(this.file) ? readJson<Partial<GuiSettings>>(this.file) : {};
-    if (stored.palette === undefined) return { palette: DEFAULT_HIGHLIGHT_PALETTE };
-    if (!isPalette(stored.palette)) throw new GateError(`settings.json contient une palette inconnue : « ${String(stored.palette)} ».`);
-    return { palette: stored.palette };
+    const stored = fs.existsSync(this.file) ? readJson<Record<string, unknown>>(this.file) : {};
+    const read = <K extends keyof GuiSettings>(key: K): GuiSettings[K] => {
+      const spec = SPECS[key];
+      const value = stored[key];
+      if (value === undefined) return spec.fallback;
+      if (!spec.allowed.includes(value as GuiSettings[K])) {
+        throw new GateError(`settings.json contient une valeur inconnue pour ${key} : « ${String(value)} ».`);
+      }
+      return value as GuiSettings[K];
+    };
+    return { palette: read("palette"), lineBreaks: read("lineBreaks") };
   }
 
-  setPalette(palette: unknown): GuiSettings {
-    if (!isPalette(palette)) {
-      throw new GateError(`Palette inconnue : « ${String(palette)} ». Palettes possibles : ${HIGHLIGHT_PALETTES.join(", ")}.`);
+  set<K extends keyof GuiSettings>(key: K, value: unknown): GuiSettings {
+    const spec = SPECS[key];
+    if (!spec.allowed.includes(value as GuiSettings[K])) {
+      throw new GateError(`${spec.label} : « ${String(value)} ». Valeurs possibles : ${spec.allowed.join(", ")}.`);
     }
     return withFileLock(this.lockFile, "settings.json", () => {
-      const settings = { ...this.get(), palette };
+      const settings = { ...this.get(), [key]: value };
       writeJsonAtomic(this.file, settings);
       return settings;
     });

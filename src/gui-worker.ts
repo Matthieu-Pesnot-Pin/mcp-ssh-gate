@@ -134,7 +134,8 @@ app.get(
   handle((): StateResponse => ({ version: APP_VERSION, servers: executor.views(), settings: settings.get() }))
 );
 
-app.put("/api/settings/palette", handle(async (c) => settings.setPalette((await readBody(c))?.palette)));
+app.put("/api/settings/palette", handle(async (c) => settings.set("palette", (await readBody(c))?.palette)));
+app.put("/api/settings/line-breaks", handle(async (c) => settings.set("lineBreaks", (await readBody(c))?.lineBreaks)));
 
 app.get(
   "/api/servers/:id/requests",

@@ -156,13 +156,15 @@ test("a terminal ticket opens one stream of its terminal, once, before it expire
   assert.equal(tickets.redeem(null, "term_a"), false);
 });
 
-test("settings: the palette defaults to sobre, persists, and rejects an unknown value", () => {
+test("settings: defaults, persistence of each setting, and rejection of unknown values", () => {
   const dir = tempDir();
   const store = new SettingsStore(dir);
-  assert.deepEqual(store.get(), { palette: "sobre" });
-  assert.deepEqual(store.setPalette("vive"), { palette: "vive" });
-  assert.deepEqual(new SettingsStore(dir).get(), { palette: "vive" });
-  assert.throws(() => store.setPalette("arc-en-ciel"), /Palette inconnue/);
+  assert.deepEqual(store.get(), { palette: "sobre", lineBreaks: "auto" });
+  assert.deepEqual(store.set("palette", "vive"), { palette: "vive", lineBreaks: "auto" });
+  assert.deepEqual(store.set("lineBreaks", "brut"), { palette: "vive", lineBreaks: "brut" });
+  assert.deepEqual(new SettingsStore(dir).get(), { palette: "vive", lineBreaks: "brut" });
+  assert.throws(() => store.set("palette", "arc-en-ciel"), /Palette inconnue/);
+  assert.throws(() => store.set("lineBreaks", "parfois"), /Mode de coupure inconnu/);
   fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ palette: "fluo" }));
-  assert.throws(() => store.get(), /palette inconnue/);
+  assert.throws(() => store.get(), /valeur inconnue pour palette/);
 });

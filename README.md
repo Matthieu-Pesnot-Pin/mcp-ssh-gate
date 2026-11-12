@@ -211,13 +211,15 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 ## L'interface
 
 - **Barre latérale** : les serveurs, l'état de leur shell, une pastille par demande en attente.
-- **Journal** : chaque commande exécutée, son auteur (Agent ou Toi), son heure, son code de retour ; un clic déplie sa sortie.
+- **Journal** : chaque commande exécutée, son auteur (Agent ou Toi), son heure, son code de retour ; un clic déplie sa sortie et affiche la commande en entier, sur plusieurs lignes si besoin.
 - **Demande en attente** : l'explication de l'agent, les commandes numérotées. Au survol d'une ligne, le crayon la modifie (Entrée pour valider, Échap pour annuler) et la croix la retire. La note pour l'agent est jointe au résultat, ou sert de motif au refus.
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
 - **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
 - **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Le bouton **Envoyer à l'agent**, sous le résultat, le notifie de cette commande.
 - **Coloration des commandes** dans la demande en attente, l'exécution et le journal : nom de commande, options, chaînes, variables, opérateurs, et en rouge les commandes sensibles (`sudo`, `rm`, `dd`, `chmod`, `kill`, `shutdown`…). Le champ de modification reste sans couleur.
-- **Réglages** (engrenage en bas de la barre latérale) : choix de la palette de coloration — Sobre (par défaut), Contrastée, Vive, Minimale ou Aucune. Le choix s'applique immédiatement et vaut pour tous les navigateurs ; il est enregistré dans `DATA_DIR/settings.json`.
+- **Réglages** (engrenage en bas de la barre latérale), appliqués immédiatement et valables pour tous les navigateurs ; ils sont enregistrés dans `DATA_DIR/settings.json` :
+  - **Coloration des commandes** : Sobre (par défaut), Contrastée, Vive, Minimale ou Aucune.
+  - **Commandes longues**, dans la demande en attente et le journal déplié : *Sauts de ligne automatiques* (par défaut) passe à la ligne avant chaque `&&` et `||` (décalés sous la commande qu'ils prolongent), après chaque `;` et après un `\` de continuation ; un opérateur entre guillemets ou un `\;` ne coupe pas la ligne. *Brutes* affiche la commande telle qu'écrite.
 
 L'interface se met à jour par rafraîchissement périodique.
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CircleX, Server, X } from 'lucide-react'
-import type { ServerView } from '@shared/model'
+import { DEFAULT_LINE_BREAK_MODE, type ServerView } from '@shared/model'
+import { LineBreakContext } from './components/CommandText'
 import { api } from './api'
 import { usePolling } from './usePolling'
 import { Sidebar } from './components/Sidebar'
@@ -34,7 +35,8 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  const palette = state.data?.settings.palette
+  const settings = state.data?.settings
+  const palette = settings?.palette
   useEffect(() => {
     if (palette) document.documentElement.dataset.palette = palette
   }, [palette])
@@ -70,6 +72,7 @@ export default function App() {
   }
 
   return (
+    <LineBreakContext.Provider value={settings?.lineBreaks ?? DEFAULT_LINE_BREAK_MODE}>
     <div className="app">
       <Sidebar
         servers={servers}
@@ -113,8 +116,8 @@ export default function App() {
         </main>
       )}
 
-      {dialog?.kind === 'settings' && palette && (
-        <SettingsModal palette={palette} onClose={() => setDialog(null)} onChanged={state.reload} onError={setNotice} />
+      {dialog?.kind === 'settings' && settings && (
+        <SettingsModal settings={settings} onClose={() => setDialog(null)} onChanged={state.reload} onError={setNotice} />
       )}
       {dialog?.kind === 'add' && <ServerModal server={null} onClose={() => setDialog(null)} onSaved={onSaved} />}
       {dialog?.kind === 'key' && <ServerModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}
@@ -153,5 +156,6 @@ export default function App() {
         </div>
       )}
     </div>
+    </LineBreakContext.Provider>
   )
 }

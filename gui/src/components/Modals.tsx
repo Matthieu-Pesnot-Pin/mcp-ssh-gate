@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Ban, Check, CircleCheck, CircleX, Copy, FileKey, Info, KeyRound, Lock, Pencil, RefreshCw, Server, Settings, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react'
-import type { HighlightPalette, KeyFileStatus, RotationResponse, ServerView } from '@shared/model'
+import type { GuiSettings, HighlightPalette, KeyFileStatus, LineBreakMode, RotationResponse, ServerView } from '@shared/model'
 import { CommandText } from './CommandText'
 import { DEDICATED_KEY_FILE, REVOKE_COMMAND, installCommand } from '@shared/install'
 import { api, type ServerFields } from '../api'
@@ -684,28 +684,35 @@ const PALETTE_CHOICES: { id: HighlightPalette; name: string }[] = [
 
 const PALETTE_SAMPLE = 'sudo journalctl -u nginx | grep "failed"'
 
-/** Réglages de l'interface : choix de la palette de coloration des commandes, appliqué dès le clic. */
+const LINE_BREAK_CHOICES: { id: LineBreakMode; name: string }[] = [
+  { id: 'brut', name: 'Brutes' },
+  { id: 'auto', name: 'Sauts de ligne automatiques' },
+]
+
+const LINE_BREAK_SAMPLE = 'cd /var/www && git pull; npm ci && pm2 restart app'
+
+/** Réglages de l'interface : palette de coloration et coupure des commandes longues, appliquées dès le clic. */
 export function SettingsModal({
-  palette,
+  settings,
   onClose,
   onChanged,
   onError,
 }: {
-  palette: HighlightPalette
+  settings: GuiSettings
   onClose: () => void
   onChanged: () => void
   onError: (message: string) => void
 }) {
-  const [selected, setSelected] = useState(palette)
+  const [selected, setSelected] = useState(settings)
   const [busy, setBusy] = useState(false)
 
-  async function choose(id: HighlightPalette) {
-    if (id === selected || busy) return
+  async function choose<K extends keyof GuiSettings>(key: K, value: GuiSettings[K], save: () => Promise<GuiSettings>) {
+    if (selected[key] === value || busy) return
     const previous = selected
-    setSelected(id)
+    setSelected({ ...selected, [key]: value })
     setBusy(true)
     try {
-      await api.setPalette(id)
+      setSelected(await save())
       onChanged()
     } catch (err) {
       setSelected(previous)
@@ -735,14 +742,34 @@ export function SettingsModal({
           <button
             key={choice.id}
             role="radio"
-            aria-checked={choice.id === selected}
-            className={`palette-option${choice.id === selected ? ' selected' : ''}`}
-            onClick={() => void choose(choice.id)}
+            aria-checked={choice.id === selected.palette}
+            className={`palette-option${choice.id === selected.palette ? ' selected' : ''}`}
+            onClick={() => void choose('palette', choice.id, () => api.setPalette(choice.id))}
           >
             <span className="palette-radio" />
             <span className="palette-name">{choice.name}</span>
             <span className="palette-sample" data-palette={choice.id}>
               <CommandText command={PALETTE_SAMPLE} />
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="settings-section-title settings-section-next">Commandes longues</div>
+      <div className="settings-help">Demandes en attente et journal déplié. Coupure à chaque ;  &&  ||  et \.</div>
+      <div className="palette-list" role="radiogroup" aria-label="Coupure des commandes longues">
+        {LINE_BREAK_CHOICES.map((choice) => (
+          <button
+            key={choice.id}
+            role="radio"
+            aria-checked={choice.id === selected.lineBreaks}
+            className={`palette-option${choice.id === selected.lineBreaks ? ' selected' : ''}`}
+            onClick={() => void choose('lineBreaks', choice.id, () => api.setLineBreaks(choice.id))}
+          >
+            <span className="palette-radio" />
+            <span className="palette-name">{choice.name}</span>
+            <span className="palette-sample multiline">
+              <CommandText command={LINE_BREAK_SAMPLE} full lineBreaks={choice.id} />
             </span>
           </button>
         ))}

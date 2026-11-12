@@ -91,9 +91,20 @@ export type HighlightPalette = (typeof HIGHLIGHT_PALETTES)[number];
 
 export const DEFAULT_HIGHLIGHT_PALETTE: HighlightPalette = "sobre";
 
+/**
+ * Affichage des commandes longues quand elles sont montrées en entier : "brut" les laisse
+ * telles qu'écrites, "auto" passe à la ligne avant chaque && et ||, après chaque ; et \.
+ */
+export const LINE_BREAK_MODES = ["brut", "auto"] as const;
+
+export type LineBreakMode = (typeof LINE_BREAK_MODES)[number];
+
+export const DEFAULT_LINE_BREAK_MODE: LineBreakMode = "auto";
+
 /** Réglages de l'interface, communs à tous les navigateurs. */
 export interface GuiSettings {
   palette: HighlightPalette;
+  lineBreaks: LineBreakMode;
 }
 
 export interface StateResponse {
