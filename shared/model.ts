@@ -84,9 +84,22 @@ export interface ServerView extends ServerPublic {
   busy: boolean;
 }
 
+/** Palettes de coloration syntaxique des commandes ; "aucune" affiche les commandes sans couleur. */
+export const HIGHLIGHT_PALETTES = ["sobre", "contrastee", "vive", "minimale", "aucune"] as const;
+
+export type HighlightPalette = (typeof HIGHLIGHT_PALETTES)[number];
+
+export const DEFAULT_HIGHLIGHT_PALETTE: HighlightPalette = "sobre";
+
+/** Réglages de l'interface, communs à tous les navigateurs. */
+export interface GuiSettings {
+  palette: HighlightPalette;
+}
+
 export interface StateResponse {
   version: string;
   servers: ServerView[];
+  settings: GuiSettings;
 }
 
 export interface RequestsResponse {

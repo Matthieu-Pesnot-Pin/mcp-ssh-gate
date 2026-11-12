@@ -3,6 +3,7 @@ import { Check, Circle, CircleCheck, CircleX, Info, LoaderCircle, OctagonX, Penc
 import type { CommandRun, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { clock, elapsed, plural, seconds } from '../format'
+import { CommandText } from './CommandText'
 
 interface RequestCardProps {
   request: GateRequest
@@ -91,7 +92,7 @@ export function RequestCard({ request, queued, busy, onDone, onError }: RequestC
               {editing === index ? (
                 <textarea ref={editRef} className="cmd-edit" rows={1} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onEditKey} />
               ) : (
-                <div className="cmd-text">{command.command}</div>
+                <div className="cmd-text"><CommandText command={command.command} /></div>
               )}
               {command.original !== null && editing !== index && <div className="cmd-original">Modifiée par toi — l'agent proposait : {command.original}</div>}
             </div>
@@ -229,7 +230,7 @@ export function RunCard({ request, onError }: RunCardProps) {
             <div key={index} className={`step-row${command.status === 'running' ? ' current' : ''}${command.status === 'pending' ? ' waiting' : ''}`}>
               <StepIcon command={command} />
               <span className="cmd-text" title={command.command}>
-                {command.command}
+                <CommandText command={command.command} />
               </span>
               <span className="step-meta" style={command.status === 'running' ? { color: 'var(--accent-soft)' } : undefined}>
                 {stepMeta(command)}
@@ -241,7 +242,7 @@ export function RunCard({ request, onError }: RunCardProps) {
 
       {shown && (
         <div>
-          <div className="field-label">{total > 1 ? `Sortie de la commande ${shownIndex + 1}` : <span className="mono">{shown.command}</span>}</div>
+          <div className="field-label">{total > 1 ? `Sortie de la commande ${shownIndex + 1}` : <span className="mono"><CommandText command={shown.command} /></span>}</div>
           <div className="output-box flush" ref={outputRef} style={{ minHeight: 120 }}>
             {shown.output}
             {shown.status === 'running' && <span className="cursor" />}

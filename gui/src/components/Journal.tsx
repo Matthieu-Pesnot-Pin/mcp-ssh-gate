@@ -3,6 +3,7 @@ import { Ban, Check, ChevronDown, ChevronRight, CircleCheck, CircleSlash, Circle
 import type { CommandRun, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { clock, plural, seconds } from '../format'
+import { CommandText } from './CommandText'
 
 function StatusIcon({ command }: { command: CommandRun }) {
   switch (command.status) {
@@ -39,7 +40,7 @@ function CommandEntry({ request, command, defaultOpen }: { request: GateRequest;
         <span className="entry-actor">{actor(request)}</span>
         <span className="entry-time">{clock(command.startedAt ?? request.createdAt)}</span>
         <span className={`entry-cmd${ran ? '' : ' dim'}`} title={command.command}>
-          {command.command}
+          {ran ? <CommandText command={command.command} /> : command.command}
         </span>
         <span className="entry-status">
           {statusText(command)}

@@ -13,6 +13,7 @@ import { runSetupMcp } from "../src/cli/setup-mcp.js";
 import { callTool } from "../src/tools/tools.js";
 import { FinishedRequestScanner } from "../src/core/watch.js";
 import { TerminalTickets } from "../src/core/terminal-tickets.js";
+import { SettingsStore } from "../src/core/settings-store.js";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-test-"));
@@ -153,4 +154,15 @@ test("a terminal ticket opens one stream of its terminal, once, before it expire
   now += 30_001;
   assert.equal(tickets.redeem(late, "term_a"), false);
   assert.equal(tickets.redeem(null, "term_a"), false);
+});
+
+test("settings: the palette defaults to sobre, persists, and rejects an unknown value", () => {
+  const dir = tempDir();
+  const store = new SettingsStore(dir);
+  assert.deepEqual(store.get(), { palette: "sobre" });
+  assert.deepEqual(store.setPalette("vive"), { palette: "vive" });
+  assert.deepEqual(new SettingsStore(dir).get(), { palette: "vive" });
+  assert.throws(() => store.setPalette("arc-en-ciel"), /Palette inconnue/);
+  fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ palette: "fluo" }));
+  assert.throws(() => store.get(), /palette inconnue/);
 });

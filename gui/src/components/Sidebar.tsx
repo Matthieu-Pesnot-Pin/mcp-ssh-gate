@@ -1,4 +1,4 @@
-import { Plus, SquareTerminal, Terminal } from 'lucide-react'
+import { Plus, Settings, SquareTerminal, Terminal } from 'lucide-react'
 import type { ServerView } from '@shared/model'
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   onSelect: (id: string) => void
   onOpenTerminals: () => void
   onAdd: () => void
+  onSettings: () => void
 }
 
 function subtitle(server: ServerView): string {
@@ -18,7 +19,7 @@ function subtitle(server: ServerView): string {
   return `${server.username}@${server.host}`
 }
 
-export function Sidebar({ servers, selectedId, terminalsOpen, terminalCount, onSelect, onOpenTerminals, onAdd }: Props) {
+export function Sidebar({ servers, selectedId, terminalsOpen, terminalCount, onSelect, onOpenTerminals, onAdd, onSettings }: Props) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -47,10 +48,15 @@ export function Sidebar({ servers, selectedId, terminalsOpen, terminalCount, onS
           </button>
         ))}
       </div>
-      <button className="btn btn-secondary btn-block" onClick={onAdd}>
-        <Plus size={18} />
-        Ajouter un serveur
-      </button>
+      <div className="sidebar-foot">
+        <button className="btn btn-secondary btn-block" onClick={onAdd}>
+          <Plus size={18} />
+          Ajouter un serveur
+        </button>
+        <button className="btn btn-secondary btn-square" onClick={onSettings} title="Réglages" aria-label="Réglages">
+          <Settings size={18} />
+        </button>
+      </div>
     </aside>
   )
 }

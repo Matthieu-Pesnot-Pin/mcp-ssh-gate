@@ -1,4 +1,4 @@
-import type { GateRequest, RequestsResponse, RotationResponse, ServerView, StateResponse, TerminalView, TerminalsResponse, TestConnectionResponse } from '@shared/model'
+import type { GateRequest, GuiSettings, HighlightPalette, RequestsResponse, RotationResponse, ServerView, StateResponse, TerminalView, TerminalsResponse, TestConnectionResponse } from '@shared/model'
 
 export interface ServerFields {
   name: string
@@ -58,6 +58,7 @@ export const api = {
   terminalTicket: (id: string) => send<{ ticket: string }>('POST', `terminals/${encodeURIComponent(id)}/ticket`),
   closeTerminal: (id: string) => send<{ closed: true }>('DELETE', `terminals/${encodeURIComponent(id)}`),
   interrupt: (id: string) => send<{ interrupted: true }>('POST', `${req(id)}/interrupt`),
+  setPalette: (palette: HighlightPalette) => send<GuiSettings>('PUT', 'settings/palette', { palette }),
 }
 
 /**

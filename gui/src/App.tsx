@@ -6,9 +6,9 @@ import { usePolling } from './usePolling'
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
 import { TerminalsScreen } from './components/TerminalsScreen'
-import { ConfirmDeleteModal, EditServerModal, RevokeKeyModal, RotateKeyModal, ServerModal } from './components/Modals'
+import { ConfirmDeleteModal, EditServerModal, RevokeKeyModal, RotateKeyModal, ServerModal, SettingsModal } from './components/Modals'
 
-type Dialog = { kind: 'add' } | { kind: 'key' | 'edit' | 'delete' | 'rotate' | 'revoke'; server: ServerView } | null
+type Dialog = { kind: 'add' | 'settings' } | { kind: 'key' | 'edit' | 'delete' | 'rotate' | 'revoke'; server: ServerView } | null
 
 const TERMINALS_HASH = '#terminaux'
 
@@ -33,6 +33,11 @@ export default function App() {
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+
+  const palette = state.data?.settings.palette
+  useEffect(() => {
+    if (palette) document.documentElement.dataset.palette = palette
+  }, [palette])
 
   useEffect(() => {
     if (!notice) return
@@ -74,6 +79,7 @@ export default function App() {
         onSelect={select}
         onOpenTerminals={() => (window.location.hash = TERMINALS_HASH)}
         onAdd={() => setDialog({ kind: 'add' })}
+        onSettings={() => setDialog({ kind: 'settings' })}
       />
 
       {terminalsOpen ? (
@@ -107,6 +113,9 @@ export default function App() {
         </main>
       )}
 
+      {dialog?.kind === 'settings' && palette && (
+        <SettingsModal palette={palette} onClose={() => setDialog(null)} onChanged={state.reload} onError={setNotice} />
+      )}
       {dialog?.kind === 'add' && <ServerModal server={null} onClose={() => setDialog(null)} onSaved={onSaved} />}
       {dialog?.kind === 'key' && <ServerModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}
       {dialog?.kind === 'rotate' && <RotateKeyModal server={dialog.server} onClose={() => setDialog(null)} onSaved={onSaved} />}

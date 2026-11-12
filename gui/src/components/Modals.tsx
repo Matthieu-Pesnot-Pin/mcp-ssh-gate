@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Ban, Check, CircleCheck, CircleX, Copy, FileKey, Info, KeyRound, Lock, Pencil, RefreshCw, Server, Settings, ShieldCheck, Trash2, TriangleAlert, X } from 'lucide-react'
-import type { KeyFileStatus, RotationResponse, ServerView } from '@shared/model'
+import type { HighlightPalette, KeyFileStatus, RotationResponse, ServerView } from '@shared/model'
+import { CommandText } from './CommandText'
 import { DEDICATED_KEY_FILE, REVOKE_COMMAND, installCommand } from '@shared/install'
 import { api, type ServerFields } from '../api'
 
@@ -669,6 +670,83 @@ export function ConfirmDeleteModal({ server, onClose, onDeleted }: ConfirmDelete
           <div>{error}</div>
         </div>
       )}
+    </Modal>
+  )
+}
+
+const PALETTE_CHOICES: { id: HighlightPalette; name: string }[] = [
+  { id: 'sobre', name: 'Sobre' },
+  { id: 'contrastee', name: 'Contrastée' },
+  { id: 'vive', name: 'Vive' },
+  { id: 'minimale', name: 'Minimale' },
+  { id: 'aucune', name: 'Aucune' },
+]
+
+const PALETTE_SAMPLE = 'sudo journalctl -u nginx | grep "failed"'
+
+/** Réglages de l'interface : choix de la palette de coloration des commandes, appliqué dès le clic. */
+export function SettingsModal({
+  palette,
+  onClose,
+  onChanged,
+  onError,
+}: {
+  palette: HighlightPalette
+  onClose: () => void
+  onChanged: () => void
+  onError: (message: string) => void
+}) {
+  const [selected, setSelected] = useState(palette)
+  const [busy, setBusy] = useState(false)
+
+  async function choose(id: HighlightPalette) {
+    if (id === selected || busy) return
+    const previous = selected
+    setSelected(id)
+    setBusy(true)
+    try {
+      await api.setPalette(id)
+      onChanged()
+    } catch (err) {
+      setSelected(previous)
+      onError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="Réglages"
+      onClose={onClose}
+      footer={
+        <>
+          <span className="modal-foot-note">Appliqué immédiatement.</span>
+          <button className="btn btn-secondary" onClick={onClose}>
+            Fermer
+          </button>
+        </>
+      }
+    >
+      <div className="settings-section-title">Coloration des commandes</div>
+      <div className="settings-help">Demandes, exécution et journal. Le champ de modification reste sans couleur.</div>
+      <div className="palette-list" role="radiogroup" aria-label="Palette de coloration">
+        {PALETTE_CHOICES.map((choice) => (
+          <button
+            key={choice.id}
+            role="radio"
+            aria-checked={choice.id === selected}
+            className={`palette-option${choice.id === selected ? ' selected' : ''}`}
+            onClick={() => void choose(choice.id)}
+          >
+            <span className="palette-radio" />
+            <span className="palette-name">{choice.name}</span>
+            <span className="palette-sample" data-palette={choice.id}>
+              <CommandText command={PALETTE_SAMPLE} />
+            </span>
+          </button>
+        ))}
+      </div>
     </Modal>
   )
 }

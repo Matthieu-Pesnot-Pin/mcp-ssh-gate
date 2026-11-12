@@ -216,6 +216,8 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
 - **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
 - **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Le bouton **Envoyer à l'agent**, sous le résultat, le notifie de cette commande.
+- **Coloration des commandes** dans la demande en attente, l'exécution et le journal : nom de commande, options, chaînes, variables, opérateurs, et en rouge les commandes sensibles (`sudo`, `rm`, `dd`, `chmod`, `kill`, `shutdown`…). Le champ de modification reste sans couleur.
+- **Réglages** (engrenage en bas de la barre latérale) : choix de la palette de coloration — Sobre (par défaut), Contrastée, Vive, Minimale ou Aucune. Le choix s'applique immédiatement et vaut pour tous les navigateurs ; il est enregistré dans `DATA_DIR/settings.json`.
 
 L'interface se met à jour par rafraîchissement périodique.
 

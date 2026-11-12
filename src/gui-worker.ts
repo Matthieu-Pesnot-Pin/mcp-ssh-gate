@@ -26,6 +26,7 @@ import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
 import { KeyService } from "./core/keys.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore, type ServerInput } from "./core/server-store.js";
+import { SettingsStore } from "./core/settings-store.js";
 import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
 
@@ -51,6 +52,7 @@ process.on("unhandledRejection", (reason) => {
 
 const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
+const settings = new SettingsStore(config.dataDir);
 const executor = new Executor(servers, requests, (message) => logger.info(message));
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
 const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
@@ -129,8 +131,10 @@ function commandIndex(c: Context): number {
 
 app.get(
   "/api/state",
-  handle((): StateResponse => ({ version: APP_VERSION, servers: executor.views() }))
+  handle((): StateResponse => ({ version: APP_VERSION, servers: executor.views(), settings: settings.get() }))
 );
+
+app.put("/api/settings/palette", handle(async (c) => settings.setPalette((await readBody(c))?.palette)));
 
 app.get(
   "/api/servers/:id/requests",
