@@ -181,7 +181,7 @@ function formatFinished(request: FinishedRequest): string {
   }
   const note = request.note && request.status !== "refused" ? " — the user left a note" : "";
   const subject = request.source === "user" ? `the user shared ${total} command(s) they ran themselves (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
-  return `[ssh-gate] ${request.serverId} — ${subject}${note} — read it with wait_for_result, request_id ${request.id}`;
+  return `[ssh-gate] ${request.serverId} — ${subject}${note} — read it with get_result, request_id ${request.id}`;
 }
 
 // --- Veilleur local ----------------------------------------------------------------

@@ -32,16 +32,13 @@ const MAX_NOTIFICATION_WAIT_SECONDS = 300;
 
 const RESULT_OUTPUT_PER_COMMAND = 20_000;
 const HISTORY_OUTPUT_PER_COMMAND = 2_000;
-const DEFAULT_WAIT_SECONDS = 300;
-const MAX_WAIT_SECONDS = 1800;
 const POLL_MS = 1000;
-const GUI_CHECK_EVERY_MS = 10_000;
 
 export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "enable_notifications",
     description:
-      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), when the user sends you a command they ran themselves, and when the user asks you to explain a command, without blocking on wait_for_result. " +
+      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), when the user sends you a command they ran themselves, and when the user asks you to explain a command. " +
       "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
       "Call it once at the start of the session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {
@@ -58,7 +55,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
     name: "wait_for_notifications",
     description:
       "Reserved for the notification watcher that the mcp-http-gateway relay runs on the agent's machine: do not call it yourself. " +
-      "To be notified, call enable_notifications; to read the outcome of a request, call wait_for_result. " +
+      "To be notified, call enable_notifications; to read the outcome of a request, call get_result. " +
       "Blocks until an event of this session happens after the cursor (a request finished, a command shared by the user, a question from the user), or until the timeout, and returns one line per event with the next cursor.",
     inputSchema: {
       type: "object",
@@ -101,7 +98,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       `Submit shell commands to run on a server. Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
       `Approved commands run in order in a persistent bash shell (cd and export carry over between commands and between requests), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
-      `Execution stops at the first command that exits non-zero. Returns a request_id: call wait_for_result with it, or, with notifications enabled, keep working and read the result when you are notified. ` +
+      `Execution stops at the first command that exits non-zero. Returns a request_id. Call enable_notifications first and keep working: you are notified when the request is finished, then read the outcome with get_result. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
     inputSchema: {
       type: "object",
@@ -120,18 +117,15 @@ export const TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
-    name: "wait_for_result",
+    name: "get_result",
     description:
-      `Wait until the user has decided on a request and its commands have finished, then return the outcome: refusal and its reason, or each command with its exit code and output, and the user's note. ` +
-      `Returns earlier with the current status when timeout_seconds elapses; call it again to keep waiting.`,
+      `Return the outcome of a finished request right away: refusal and its reason, or each command with its exit code and output, and the user's note. ` +
+      `For a request that is not finished yet, return its current status without waiting. ` +
+      `Always enable notifications (enable_notifications, then the Monitor call it returns) before relying on this tool: the watcher is what tells you a request is finished and when to call get_result. Never call it in a loop to wait.`,
     inputSchema: {
       type: "object",
       properties: {
-        request_id: { type: "string", description: "Id returned by submit_commands." },
-        timeout_seconds: {
-          type: "number",
-          description: `How long to wait, in seconds (default ${DEFAULT_WAIT_SECONDS}, max ${MAX_WAIT_SECONDS}).`,
-        },
+        request_id: { type: "string", description: "Id returned by submit_commands or given in the notification." },
       },
       required: ["request_id"],
     },
@@ -186,10 +180,6 @@ const SubmitArgs = z.object({
   server: z.string().min(1),
   commands: z.array(z.string()).min(1).max(MAX_COMMANDS_PER_REQUEST),
   explanation: z.string().trim().min(1, "explanation must not be empty"),
-});
-const WaitArgs = z.object({
-  request_id: z.string().min(1),
-  timeout_seconds: z.number().positive().max(MAX_WAIT_SECONDS).optional(),
 });
 const RequestArgs = z.object({ request_id: z.string().min(1) });
 const AnswerArgs = z.object({
@@ -276,8 +266,8 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
   ctx.ensureGui();
   const url = ctx.guiUrl();
   const next =
-    `If your notification watcher is armed, keep working: you will be notified when it is finished. ` +
-    `Otherwise call wait_for_result with request_id "${request.id}".`;
+    `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
+    `If you have not called enable_notifications in this session, do it now.`;
   return text(
     `Request ${request.id} submitted to ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
   );
@@ -327,7 +317,7 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
       "",
       "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request you submitted",
       "announces itself when its commands have all run, or when the user refused or interrupted it — one line per",
-      "request. Read the outcome with wait_for_result, which then returns immediately.",
+      "request. Read the outcome with get_result.",
       "When the user asks you to explain a command from the GUI, a line gives the statement, the request_id and the",
       "question_id: answer it with answer_question.",
       "",
@@ -338,26 +328,15 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   );
 }
 
-async function waitForResult(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
-  const { request_id, timeout_seconds } = parse(WaitArgs, args);
-  const deadline = Date.now() + (timeout_seconds ?? DEFAULT_WAIT_SECONDS) * 1000;
-  let nextGuiCheck = 0;
-
-  for (;;) {
-    const request = ctx.requests.get(request_id);
-    if (isFinalStatus(request.status)) {
-      return text(formatRequest(request, serverOrNull(ctx, request.serverId), RESULT_OUTPUT_PER_COMMAND));
-    }
-    if (Date.now() >= nextGuiCheck) {
-      ctx.ensureGui();
-      nextGuiCheck = Date.now() + GUI_CHECK_EVERY_MS;
-    }
-    if (Date.now() >= deadline || signal?.aborted) {
-      const state = request.status === "pending" ? "still waiting for the user's approval" : "still running";
-      return text(`Request ${request.id} is ${state}. Call wait_for_result again to keep waiting.`);
-    }
-    await sleep(Math.min(POLL_MS, Math.max(0, deadline - Date.now())), signal);
+function getResult(ctx: ToolContext, args: unknown): CallToolResult {
+  const { request_id } = parse(RequestArgs, args);
+  const request = ctx.requests.get(request_id);
+  if (isFinalStatus(request.status)) {
+    return text(formatRequest(request, serverOrNull(ctx, request.serverId), RESULT_OUTPUT_PER_COMMAND));
   }
+  if (request.status === "pending") ctx.ensureGui();
+  const state = request.status === "pending" ? "still waiting for the user's approval" : "still running";
+  return text(`Request ${request.id} is ${state}. Keep working: your notification watcher tells you when it is finished.`);
 }
 
 /** Outil d'attente du veilleur du gateway : une ligne par événement après le curseur. */
@@ -426,8 +405,8 @@ export async function callTool(ctx: ToolContext, name: string, args: unknown, si
         return updateServerNotes(ctx, args);
       case "submit_commands":
         return submitCommands(ctx, args);
-      case "wait_for_result":
-        return await waitForResult(ctx, args, signal);
+      case "get_result":
+        return getResult(ctx, args);
       case "answer_question":
         return answerQuestion(ctx, args);
       case "cancel_request":

@@ -7,7 +7,7 @@ L'agent ne détient aucun accès au serveur. La paire de clés SSH est généré
 ```
 Agent ──submit_commands──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
   ▲                                                        │
-  └──── wait_for_result ◀── sortie, code de retour ◀── SSH ─┘  (shell bash persistant)
+  └── notification + get_result ◀── sortie, code de retour ◀── SSH ─┘  (shell bash persistant)
 ```
 
 ---
@@ -158,7 +158,7 @@ Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un 
 | `list_servers` | Serveurs configurés, si leur connexion a été testée, et leurs notes. |
 | `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
 | `submit_commands` | Soumet 1 à 20 commandes avec une explication. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
-| `wait_for_result` | Attend ta décision et la fin de l'exécution, puis renvoie le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Rend la main au bout de `timeout_seconds` (300 par défaut, 1800 au plus) : il suffit de le rappeler. |
+| `get_result` | Renvoie aussitôt le résultat d'une demande terminée : le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Pour une demande pas encore terminée, renvoie son état, sans attendre. S'utilise toujours avec les notifications activées : c'est la notification qui dit quand l'appeler. |
 | `enable_notifications` | Active les notifications (fin de demande, commande envoyée par toi, demande d'explication) et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
 | `answer_question` | Répond à une demande d'explication posée depuis l'interface sur une instruction ; la réponse s'affiche sous l'instruction. |
 | `wait_for_notifications` | Réservé au veilleur du gateway, qui l'appelle en boucle ; l'agent ne l'appelle pas. |
@@ -168,15 +168,15 @@ Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un 
 
 ## Notifications
 
-Plutôt que d'attendre avec `wait_for_result`, l'agent peut continuer à travailler et être prévenu quand une demande qu'il a soumise est terminée : toutes ses commandes ont tourné, ou tu l'as refusée ou interrompue.
+L'agent ne bloque jamais sur une demande : il continue à travailler et est prévenu quand une demande qu'il a soumise est terminée — toutes ses commandes ont tourné, ou tu l'as refusée ou interrompue.
 
 L'agent appelle `enable_notifications` une fois, puis lance l'appel Monitor que l'outil lui renvoie. Le veilleur ainsi armé tourne sur la machine de l'agent et écrit une ligne par demande terminée, ce qui réveille l'agent, même inactif :
 
 ```
-[ssh-gate] pxp-dev — request 0mwavl7lb-419091 completed: 4/4 command(s) succeeded — read it with wait_for_result, request_id 0mwavl7lb-419091
+[ssh-gate] pxp-dev — request 0mwavl7lb-419091 completed: 4/4 command(s) succeeded — read it with get_result, request_id 0mwavl7lb-419091
 ```
 
-L'agent lit ensuite le résultat avec `wait_for_result`, qui répond aussitôt.
+L'agent lit ensuite le résultat avec `get_result`.
 
 **En local**, `enable_notifications` dépose un relais dans `~/.mcp-ssh-gate/watch/` (le dossier de données et le point de reprise, aucun secret) et renvoie la commande `mcp-ssh-gate --watch <session>`. Ce veilleur lit directement les demandes dans `DATA_DIR` et n'annonce que celles de **sa** session.
 
@@ -191,7 +191,7 @@ L'agent lit ensuite le résultat avec `wait_for_result`, qui répond aussitôt.
 Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les demandes que l'agent a retirées ne sont pas annoncées. Une commande que tu tapes toi-même ne l'est que si tu cliques sur **Envoyer à l'agent** sous son résultat : elle est alors annoncée à tous les agents qui ont activé les notifications.
 
 ```
-[ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id 0mwb2k1qa-7f03c2
+[ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with get_result, request_id 0mwb2k1qa-7f03c2
 ```
 
 Une **demande d'explication** posée depuis l'interface est annoncée à la session qui a soumis la commande ; pour une commande que tu as tapée toi-même, à toutes les sessions. L'agent répond avec `answer_question` ; tant qu'il n'a pas répondu, tu peux retirer la question.

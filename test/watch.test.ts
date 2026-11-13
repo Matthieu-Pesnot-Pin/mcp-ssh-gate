@@ -71,7 +71,7 @@ test("the local watcher announces each finished request of its session once, and
   await waitFor(() => first.output().includes(mine.id), "the first notification");
   await new Promise((resolve) => setTimeout(resolve, 1500));
   assert.deepEqual(first.output().trim().split("\n"), [
-    `[ssh-gate] web — request ${mine.id} completed: 2/2 command(s) succeeded — read it with wait_for_result, request_id ${mine.id}`,
+    `[ssh-gate] web — request ${mine.id} completed: 2/2 command(s) succeeded — read it with get_result, request_id ${mine.id}`,
   ]);
   first.child.kill();
 
@@ -119,7 +119,7 @@ test("behind the gateway: enable_notifications returns a watch specification and
   const first = await callTool(ctx, "wait_for_notifications", { cursor: spec.cursor, timeout_seconds: 5 });
   const events = first._meta?.["gateway/events"] as { cursor: string; lines: string[] };
   assert.deepEqual(events.lines, [
-    `[ssh-gate] db — request ${mine.id} failed at command 2/2 (exit 2) — read it with wait_for_result, request_id ${mine.id}`,
+    `[ssh-gate] db — request ${mine.id} failed at command 2/2 (exit 2) — read it with get_result, request_id ${mine.id}`,
   ]);
   assert.ok(Number(events.cursor) > Number(spec.cursor));
 
@@ -142,7 +142,7 @@ test("a command typed by the user is announced to every session once the user sh
     draft.sharedAt = new Date().toISOString();
   });
   const [shared] = scanner.since(cursor);
-  assert.equal(formatEvent(shared), `[ssh-gate] web — the user shared 1 command(s) they ran themselves (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with wait_for_result, request_id ${typed.id}`);
+  assert.equal(formatEvent(shared), `[ssh-gate] web — the user shared 1 command(s) they ran themselves (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with get_result, request_id ${typed.id}`);
   assert.deepEqual(new RequestEventScanner(store, "ses_other").since(cursor).map((r) => r.id), [typed.id]);
   assert.deepEqual(scanner.since(shared.eventMs), []);
 });
