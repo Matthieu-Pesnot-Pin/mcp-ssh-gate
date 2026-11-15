@@ -69,7 +69,7 @@ npx -y @imenam/mcp-ssh-gate --generate-vault-key
 
 ### Dans le gateway manager
 
-Ajoute le MCP à une gateway avec ces variables, et coche **secret** pour `VAULT_KEY` : le manager la stocke chiffrée avec sa clé maître et la réinjecte au lancement.
+Ajoute le MCP à une gateway avec ces variables, et coche **secret** pour `VAULT_KEY` : le manager la stocke chiffrée avec sa clé maître et la réinjecte au lancement. `DATA_DIR` n'y figure pas : le manager le renseigne automatiquement, avec un dossier propre à ce MCP.
 
 ```json
 {
@@ -81,7 +81,6 @@ Ajoute le MCP à une gateway avec ces variables, et coche **secret** pour `VAULT
         "PROXY_URL": "http://localhost:3000",
         "APP_GROUP": "SSH Gate",
         "APP_PATH": "/ssh-gate",
-        "DATA_DIR": "/srv/ssh-gate",
         "VAULT_KEY": { "secret": true, "value": "<clé générée par --generate-vault-key>" }
       }
     }
@@ -117,7 +116,7 @@ Les connexions SSH partent de la machine du gateway : c'est elle qui doit joindr
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `DATA_DIR` | — | **Requis.** Serveurs, clés chiffrées et historique des commandes. Créé s'il n'existe pas. |
+| `DATA_DIR` | — | **Requis.** Serveurs, clés chiffrées et historique des commandes. Créé s'il n'existe pas. Le MCP Gateway Manager le renseigne automatiquement. |
 | `VAULT_KEY` | — | **Requis.** 32 octets en base64. Chiffre les clés privées SSH (AES-256-GCM). La perdre ou la changer rend les clés existantes illisibles : le MCP refuse alors de démarrer. |
 | `PROXY_URL` | — | URL du proxy qui expose l'interface. |
 | `APP_PORT` | — | Port local de l'interface quand il n'y a pas de proxy. `PROXY_URL` ou `APP_PORT` est **requis** : sans interface, rien ne peut être validé. `PROXY_URL` prime si les deux sont renseignés. |
