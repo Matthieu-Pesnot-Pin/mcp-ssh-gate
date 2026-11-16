@@ -31,7 +31,7 @@ export interface GateRequest {
   id: string;
   serverId: string;
   source: RequestSource;
-  /** Session d'agent qui a soumis la demande ; null pour une commande saisie à la main. */
+  /** Session d'agent de la demande ; null pour la session « Vous » du serveur. */
   sessionId: string | null;
   /** Explication de l'agent ; vide pour une commande saisie à la main. */
   explanation: string;
@@ -97,10 +97,42 @@ export const MAX_NOTES_LENGTH = 20_000;
 
 export type SessionState = "connected" | "closed";
 
-export interface ServerView extends ServerPublic {
-  session: SessionState;
+export type SessionCloser = "agent" | "user";
+
+/**
+ * Session ouverte par un agent sur un serveur : elle a son propre shell, et l'agent
+ * n'est notifié que de ce qui s'y passe.
+ */
+export interface AgentSession {
+  id: string;
+  serverId: string;
+  /** Libellé choisi par l'agent, affiché dans l'interface. */
+  name: string;
+  openedAt: string;
+  closedAt: string | null;
+  closedBy: SessionCloser | null;
+}
+
+export const MAX_SESSION_NAME_LENGTH = 40;
+
+/** Session d'un serveur telle que l'interface l'affiche ; `id` vaut null pour la session « Vous ». */
+export interface SessionView {
+  id: string | null;
+  serverId: string;
+  name: string;
+  /** Ouverture par l'agent ; null pour la session « Vous ». */
+  openedAt: string | null;
+  shell: SessionState;
   cwd: string | null;
   pendingCount: number;
+  busy: boolean;
+}
+
+export interface ServerView extends ServerPublic {
+  /** La session « Vous » d'abord, puis les sessions d'agent ouvertes, des plus anciennes aux plus récentes. */
+  sessions: SessionView[];
+  pendingCount: number;
+  /** Vrai quand une demande s'exécute dans l'une des sessions du serveur. */
   busy: boolean;
 }
 

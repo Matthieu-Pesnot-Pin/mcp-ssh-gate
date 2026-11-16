@@ -5,10 +5,13 @@ Un agent propose des commandes à exécuter sur un serveur de production ; tu le
 L'agent ne détient aucun accès au serveur. La paire de clés SSH est générée par le MCP à l'ajout d'un serveur ; tu poses la clé publique sur le serveur dans un fichier qui lui est propre, la clé privée reste chiffrée dans le MCP et n'est jamais affichée.
 
 ```
-Agent ──submit_commands──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
+Agent ──open_session──▶ session (son propre shell)
+      ──submit_commands──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
   ▲                                                        │
-  └── notification + get_result ◀── sortie, code de retour ◀── SSH ─┘  (shell bash persistant)
+  └── notification + get_result ◀── sortie, code de retour ◀── SSH ─┘  (shell bash persistant de la session)
 ```
+
+Chaque agent travaille dans **sa session** : un shell à lui sur le serveur, et des notifications limitées à ce qui s'y passe, même quand plusieurs agents partagent le même SSH Gate.
 
 ---
 
@@ -148,17 +151,19 @@ Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de co
 Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un fichier temporaire renommé.
 
 - **Renouveler la clé** : SSH Gate génère une nouvelle paire, l'ajoute à côté de l'actuelle, l'essaie sur une seconde connexion, puis ne garde qu'elle. Un échec avant la dernière étape retire la ligne ajoutée : la clé actuelle continue de fonctionner. Refusé si la clé figure aussi dans `~/.ssh/authorized_keys`, où elle resterait valable.
-- **Révoquer la clé** : SSH Gate vide son fichier, vérifie que le serveur refuse désormais la clé, ferme son shell et ses terminaux, puis efface la paire. Le serveur reste dans la liste ; « Installer une clé » en génère une nouvelle. Si le serveur ne répond pas, l'interface donne la commande à lancer soi-même (`: > ~/.ssh/authorized_keys.d/ssh-gate`) puis efface la clé.
+- **Révoquer la clé** : SSH Gate vide son fichier, vérifie que le serveur refuse désormais la clé, ferme les shells de ses sessions et ses terminaux, puis efface la paire. Le serveur reste dans la liste ; « Installer une clé » en génère une nouvelle. Si le serveur ne répond pas, l'interface donne la commande à lancer soi-même (`: > ~/.ssh/authorized_keys.d/ssh-gate`) puis efface la clé.
 
 ## Les outils
 
 | Outil | Rôle |
 |---|---|
-| `list_servers` | Serveurs configurés, si leur connexion a été testée, et leurs notes. |
+| `list_servers` | Serveurs configurés, si leur connexion a été testée, les sessions d'agent ouvertes et leurs notes. |
 | `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
-| `submit_commands` | Soumet 1 à 20 commandes avec une explication. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
+| `open_session` | Ouvre une session sur un serveur testé, sous un nom court que tu vois dans l'interface (40 caractères au plus). Renvoie un `session_id` (`sh_…`). |
+| `close_session` | Ferme une session : son shell est fermé et ses demandes en attente sont retirées. Refusé tant qu'une demande de la session s'exécute. |
+| `submit_commands` | Soumet 1 à 20 commandes avec une explication, dans la session donnée par `session_id`. Rien ne s'exécute avant ta validation. Renvoie un `request_id`. |
 | `get_result` | Renvoie aussitôt le résultat d'une demande terminée : le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Pour une demande pas encore terminée, renvoie son état, sans attendre. S'utilise toujours avec les notifications activées : c'est la notification qui dit quand l'appeler. |
-| `enable_notifications` | Active les notifications (fin de demande, commande envoyée par toi, demande d'explication) et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
+| `enable_notifications` | Active les notifications d'une session (fin de demande, commande envoyée par toi dans la session, demande d'explication, fermeture de la session par toi) et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
 | `answer_question` | Répond à une demande d'explication posée depuis l'interface sur une instruction ; la réponse s'affiche sous l'instruction. |
 | `wait_for_notifications` | Réservé au veilleur du gateway, qui l'appelle en boucle ; l'agent ne l'appelle pas. |
 | `cancel_request` | Retire une demande pas encore validée. |
@@ -169,7 +174,9 @@ Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un 
 
 L'agent ne bloque jamais sur une demande : il continue à travailler et est prévenu quand une demande qu'il a soumise est terminée — toutes ses commandes ont tourné, ou tu l'as refusée ou interrompue.
 
-L'agent appelle `enable_notifications` une fois, puis lance l'appel Monitor que l'outil lui renvoie. Le veilleur ainsi armé tourne sur la machine de l'agent et écrit une ligne par demande terminée, ce qui réveille l'agent, même inactif :
+Les notifications sont celles d'**une session** : chaque agent ne reçoit que ce qui se passe dans la sienne, quel que soit le nombre d'agents branchés sur le même SSH Gate.
+
+L'agent appelle `enable_notifications` avec son `session_id` juste après `open_session`, puis lance l'appel Monitor que l'outil lui renvoie. Le veilleur ainsi armé tourne sur la machine de l'agent et écrit une ligne par demande terminée, ce qui réveille l'agent, même inactif :
 
 ```
 [ssh-gate] pxp-dev — request 0mwavl7lb-419091 completed: 4/4 command(s) succeeded — read it with get_result, request_id 0mwavl7lb-419091
@@ -177,23 +184,29 @@ L'agent appelle `enable_notifications` une fois, puis lance l'appel Monitor que 
 
 L'agent lit ensuite le résultat avec `get_result`.
 
-**En local**, `enable_notifications` dépose un relais dans `~/.mcp-ssh-gate/watch/` (le dossier de données et le point de reprise, aucun secret) et renvoie la commande `mcp-ssh-gate --watch <session>`. Ce veilleur lit directement les demandes dans `DATA_DIR` et n'annonce que celles de **sa** session.
+**En local**, `enable_notifications` dépose un relais dans `~/.mcp-ssh-gate/watch/` (le dossier de données et le point de reprise, aucun secret) et renvoie la commande `mcp-ssh-gate --watch <session_id>`. Ce veilleur lit directement les demandes dans `DATA_DIR` et n'annonce que celles de **sa** session ; il s'arrête une fois la session fermée.
 
 **Derrière mcp-http-gateway**, la veille suit la [convention du gateway](https://www.npmjs.com/package/@imenam/mcp-http-gateway), comme mcp-telegram :
 
-1. `enable_notifications` déclare la propriété réservée `_gateway_watch`. Le relais la remplit, et l'outil répond par une spécification de veille (`_meta["gateway/watch"]`) qui désigne l'outil d'attente `wait_for_notifications` et le point de reprise.
+1. `enable_notifications` déclare la propriété réservée `_gateway_watch`. Le relais la remplit, et l'outil répond par une spécification de veille (`_meta["gateway/watch"]`) qui désigne l'outil d'attente `wait_for_notifications`, ses arguments (`session_id`) et le point de reprise.
 2. Le relais dépose le fichier de veille sur la machine de l'agent et lui rend l'appel Monitor `npx -y @imenam/mcp-http-gateway --watch <fichier>`.
 3. Ce veilleur appelle en boucle `wait_for_notifications` à travers le gateway. Chaque appel attend au plus 50 s une demande terminée, et renvoie les lignes et le nouveau point de reprise dans `_meta["gateway/events"]`.
 
-`wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway : le veilleur de chacun annonce les demandes soumises par tous.
+`wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway ; c'est le `session_id` passé à chaque appel qui distingue leurs sessions.
 
-Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les demandes que l'agent a retirées ne sont pas annoncées. Une commande que tu tapes toi-même ne l'est que si tu cliques sur **Envoyer à l'agent** sous son résultat : elle est alors annoncée à tous les agents qui ont activé les notifications.
+Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les demandes que l'agent a retirées ne sont pas annoncées. Une commande que tu tapes toi-même dans la session d'un agent ne l'est que si tu cliques sur **Envoyer à l'agent** sous son résultat : elle est alors annoncée à cet agent seul. Une commande tapée dans ta session « Vous » n'est annoncée à personne.
 
 ```
-[ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with get_result, request_id 0mwb2k1qa-7f03c2
+[ssh-gate] pxp-dev — the user shared 1 command(s) they ran themselves in your session (request 0mwb2k1qa-7f03c2), completed: 1/1 command(s) succeeded — read it with get_result, request_id 0mwb2k1qa-7f03c2
 ```
 
-Une **demande d'explication** posée depuis l'interface est annoncée à la session qui a soumis la commande ; pour une commande que tu as tapée toi-même, à toutes les sessions. L'agent répond avec `answer_question` ; tant qu'il n'a pas répondu, tu peux retirer la question.
+Une **demande d'explication** posée depuis l'interface est annoncée à la session de la commande. L'agent répond avec `answer_question` ; tant qu'il n'a pas répondu, tu peux retirer la question. Les commandes de ta session « Vous » n'ont pas de bouton **Expliquer** : aucun agent n'y répondrait.
+
+Quand tu fermes une session depuis l'interface, son agent en est prévenu, puis son veilleur s'arrête :
+
+```
+[ssh-gate] pxp-dev — the user closed your session sh_7f3a91c2 ("deploy shop"): its shell is gone and its pending requests were withdrawn. Open a new session with open_session if you still need to run commands.
+```
 
 ```
 [ssh-gate] pxp-dev — the user asks you to explain part of command 1/2 of request 0mwb2k1qa-7f03c2: df -h / — answer with answer_question, request_id 0mwb2k1qa-7f03c2, question_id q_3fa2b1c0
@@ -201,13 +214,14 @@ Une **demande d'explication** posée depuis l'interface est annoncée à la sess
 
 ## Notes du serveur
 
-Chaque serveur porte des notes en texte libre : dossier des sites, gestion des applis (PM2, systemd…), emplacement des configurations, règles à respecter. L'agent les reçoit avec `list_servers` avant d'intervenir et les complète avec `update_server_notes` quand il découvre quelque chose d'utile ; tu les lis et les modifies dans l'onglet **Notes** du serveur.
+Chaque serveur porte des notes en texte libre : dossier des sites, gestion des applis (PM2, systemd…), emplacement des configurations, règles à respecter. L'agent les reçoit avec `list_servers` avant d'intervenir et les complète avec `update_server_notes` quand il découvre quelque chose d'utile ; tu les lis et les modifies dans le volet que le bouton **Notes du serveur** ouvre, dans le bandeau du serveur. Elles sont communes à toutes ses sessions.
 
 Les notes sont limitées à 20 000 caractères. Une modification faite dans l'interface est refusée si l'agent a changé les notes pendant la saisie, pour ne pas écraser sa mise à jour.
 
 ## Exécution
 
-- Les commandes validées s'exécutent **dans l'ordre**, dans un shell `bash -l` **persistant** par serveur : un `cd` ou un `export` reste actif pour les commandes et les demandes suivantes.
+- Les commandes validées s'exécutent **dans l'ordre**, dans le shell `bash -l` **persistant** de leur session : un `cd` ou un `export` reste actif pour les commandes et les demandes suivantes de la session, jamais dans les autres. Chaque serveur a ta session « Vous » et une session par agent qui en a ouvert une ; le shell d'une session s'ouvre à sa première commande.
+- Une seule demande s'exécute à la fois par session ; deux sessions d'un même serveur peuvent tourner en parallèle.
 - **Pas de terminal** : l'entrée standard est `/dev/null` (une commande qui attend une saisie reçoit une fin de fichier), stderr est fusionné dans stdout. `sudo` doit être configuré sans mot de passe pour l'utilisateur SSH.
 - Chaque commande est d'abord vérifiée avec `bash -n` : une erreur de syntaxe l'arrête sans rien exécuter.
 - Le lot **s'arrête à la première commande** dont le code de retour n'est pas 0 ; les suivantes sont marquées « non exécutée ».
@@ -216,12 +230,14 @@ Les notes sont limitées à 20 000 caractères. Une modification faite dans l'in
 
 ## L'interface
 
-- **Barre latérale** : les serveurs, l'état de leur shell, une pastille par demande en attente.
-- **Journal** : chaque commande exécutée, son auteur (Agent ou Toi), son heure, son code de retour ; un clic déplie sa sortie et affiche la commande en entier, sur plusieurs lignes si besoin.
+- **Barre latérale** : les serveurs, et sous chacun ses terminaux puis ses sessions — « Vous », puis celles des agents, sous le nom qu'ils leur ont donné. Une session porte une pastille par demande en attente, ou une roue pendant une exécution. Le chevron replie ou déplie les sessions d'un serveur ; replié, le serveur montre le total de ses demandes en attente. L'adresse de la page désigne la session : `#/<serveur>` pour « Vous », `#/<serveur>/<session_id>` pour une session d'agent.
+- **Bandeau du serveur**, en haut : son nom, son hôte, le bouton **Notes du serveur** et le menu du serveur (clé, modification, fermeture des shells, suppression). Il reste le même quelle que soit la session choisie.
+- **En-tête de la session**, sous le bandeau : son nom, « Agent » ou « Ta session », le dossier courant de son shell (ou « shell fermé »), et pour une session d'agent le bouton **Fermer la session**. Fermer une session qui a des demandes en attente demande confirmation, car elles sont retirées ; une session dont une commande s'exécute ne se ferme pas.
+- **Journal** de la session : chaque commande exécutée, son auteur (Agent ou Toi), son heure, son code de retour ; un clic déplie sa sortie et affiche la commande en entier, sur plusieurs lignes si besoin.
 - **Demande en attente** : l'explication de l'agent, les commandes numérotées. Au survol d'une ligne, le crayon la modifie (Entrée pour valider, Échap pour annuler) et la croix la retire. La note pour l'agent est jointe au résultat, ou sert de motif au refus.
 - **Exécution en cours** : l'avancement commande par commande et la sortie en direct.
-- **Onglets Session / Notes** dans l'en-tête du serveur ; la pastille de demande en attente reste visible sur « Session ».
-- **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le même shell, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Le bouton **Envoyer à l'agent**, sous le résultat, le notifie de cette commande.
+- **Notes du serveur** : un volet à droite de la session, ouvert et fermé par le bouton du bandeau ; il reste ouvert quand tu passes d'une session à l'autre du même serveur.
+- **Saisie manuelle** en bas d'écran : une commande tapée là s'exécute aussitôt dans le shell de la session affichée, et l'agent la voit dans l'historique. La saisie reprend le focus à la fin de l'exécution. Dans la session d'un agent, le bouton **Envoyer à l'agent**, sous le résultat, notifie cet agent de la commande.
 - **Expliquer une instruction** : dans la demande en attente et le journal déplié, en mode *Sauts de ligne automatiques*, chaque instruction (partie de commande délimitée par `;`) affiche au survol un bouton **Expliquer** (toujours visible sur téléphone). La question part à l'agent par les notifications ; sa réponse s'affiche sous l'instruction, et la croix la masque. En mode *Brutes*, il n'y a pas de bouton : les explications déjà reçues suivent la commande.
 - **Coloration des commandes** dans la demande en attente, l'exécution et le journal : nom de commande, options, chaînes, variables, opérateurs, et en rouge les commandes sensibles (`sudo`, `rm`, `dd`, `chmod`, `kill`, `shutdown`…). Le champ de modification reste sans couleur.
 - **Réglages** (engrenage en bas de la barre latérale), appliqués immédiatement et valables pour tous les navigateurs ; ils sont enregistrés dans `DATA_DIR/settings.json` :
@@ -234,6 +250,8 @@ L'interface se met à jour par rafraîchissement périodique.
 
 L'entrée **Terminaux** de la barre latérale ouvre de vrais terminaux interactifs sur tes serveurs, un par onglet, plusieurs par serveur si besoin : `vim`, `htop`, `sudo` avec mot de passe et les couleurs fonctionnent. **Nouveau terminal** propose les serveurs dont la connexion a été testée.
 
+Chaque serveur a aussi sa ligne **Terminaux**, au-dessus de « Vous » : elle n'affiche que les terminaux de ce serveur, et **Nouveau terminal** y ouvre directement un terminal sur lui.
+
 - Chaque terminal a sa propre connexion SSH, avec la clé et l'empreinte du serveur, distincte du shell des demandes de l'agent.
 - La session reste ouverte si tu fermes la page : en revenant, la fin de la sortie est réaffichée. Elle se termine avec **Fermer la session**, la croix de l'onglet, ou quand le shell distant s'arrête. Un arrêt du worker ferme tous les terminaux.
 - **L'agent n'y a pas accès** : rien de ce qui s'y passe n'apparaît dans le journal ni dans les notifications.
@@ -241,10 +259,10 @@ L'entrée **Terminaux** de la barre latérale ouvre de vrais terminaux interacti
 
 ## Architecture
 
-- Chaque session d'agent lance son processus MCP ; **un seul worker** sert l'interface et exécute les commandes pour toutes. Il écrit un battement dans `DATA_DIR/gui.json` ; un processus MCP qui ne le voit plus en démarre un autre.
-- Chaque processus MCP reçoit un identifiant de session, enregistré sur les demandes qu'il soumet : c'est ce qui permet au veilleur de n'annoncer que les demandes de sa session. Le veilleur local signale sa présence dans `DATA_DIR/watchers/`.
+- Chaque agent branché en local lance son processus MCP ; derrière un gateway, un seul processus sert tous les agents. **Un seul worker** sert l'interface et exécute les commandes pour tous. Il écrit un battement dans `DATA_DIR/gui.json` ; un processus MCP qui ne le voit plus en démarre un autre.
+- Les sessions d'agent sont des fichiers JSON dans `DATA_DIR/sessions/<session_id>.json` : serveur, nom, ouverture, et fermeture (date, et qui l'a fermée). Leur identifiant est enregistré sur les demandes : c'est ce qui permet au veilleur de n'annoncer que les demandes de sa session. Le veilleur local signale sa présence dans `DATA_DIR/watchers/`.
 - Les demandes sont des fichiers JSON dans `DATA_DIR/requests/<serveur>/`, écrits par renommage atomique et modifiés sous verrou de fichier.
-- Les sessions SSH vivent dans le worker. S'il s'arrête pendant une exécution, la demande est marquée en échec au démarrage suivant : le résultat des commandes en cours est inconnu.
+- Les shells vivent dans le worker, un par session. Quand un agent ferme sa session, le worker ferme son shell au rafraîchissement suivant de l'interface. Si le worker s'arrête pendant une exécution, la demande est marquée en échec au démarrage suivant : le résultat des commandes en cours est inconnu.
 
 ## Développement
 

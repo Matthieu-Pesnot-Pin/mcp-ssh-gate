@@ -1,27 +1,27 @@
 import { z } from "zod";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { MAX_ANSWER_LENGTH, MAX_COMMANDS_PER_REQUEST, isFinalStatus } from "../../shared/model.js";
+import { MAX_ANSWER_LENGTH, MAX_COMMANDS_PER_REQUEST, MAX_SESSION_NAME_LENGTH, isFinalStatus } from "../../shared/model.js";
 import { GateError } from "../core/errors.js";
 import type { RequestStore } from "../core/request-store.js";
 import type { ServerStore, StoredServer } from "../core/server-store.js";
+import type { SessionStore } from "../core/session-store.js";
 import { MONITOR_TIMEOUT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, type RequestEventScanner } from "../core/watch.js";
 import { formatRequest } from "./format.js";
 
 export interface ToolContext {
   servers: ServerStore;
   requests: RequestStore;
+  sessions: SessionStore;
   /** Démarre le worker de l'interface si aucun n'est vivant. */
   ensureGui: () => void;
   /** URL de l'interface servie par le worker vivant. */
   guiUrl: () => string | null;
   reconnectGui: () => Promise<CallToolResult>;
-  /** Session d'agent de ce processus MCP, enregistrée sur les demandes qu'il soumet. */
-  sessionId: string;
   dataDir: string;
-  /** Commande que l'outil Monitor de l'hôte lance pour surveiller cette session. */
-  watchCommand: string;
-  /** Événements de cette session, lus par l'outil d'attente du veilleur du gateway. */
-  events: RequestEventScanner;
+  /** Commande que l'outil Monitor de l'hôte lance pour surveiller une session. */
+  watchCommand: (sessionId: string) => string;
+  /** Événements d'une session, lus par l'outil d'attente du veilleur du gateway. */
+  events: (sessionId: string) => RequestEventScanner;
 }
 
 export const WATCH_ARG = "_gateway_watch";
@@ -34,21 +34,50 @@ const RESULT_OUTPUT_PER_COMMAND = 20_000;
 const HISTORY_OUTPUT_PER_COMMAND = 2_000;
 const POLL_MS = 1000;
 
+const SESSION_ID_PROPERTY = { type: "string", description: "Id of your session, as returned by open_session." };
+
 export const TOOL_DEFINITIONS: Tool[] = [
   {
-    name: "enable_notifications",
+    name: "open_session",
     description:
-      "Get notified when a request you submitted is finished (all its commands ran, or the user refused or interrupted it), when the user sends you a command they ran themselves, and when the user asks you to explain a command. " +
-      "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
-      "Call it once at the start of the session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+      "Open your own session on a server before submitting commands: it gets its own persistent bash shell (cd and export only carry over inside the session), and you are only notified of what happens in it. " +
+      "Returns a session_id to pass to submit_commands and enable_notifications. Open one session per server you work on and keep it for the whole task; " +
+      "the user sees it in the GUI under the name you give. Close it with close_session when the task is done.",
     inputSchema: {
       type: "object",
       properties: {
+        server: { type: "string", description: "Server id or name, as returned by list_servers." },
+        name: { type: "string", maxLength: MAX_SESSION_NAME_LENGTH, description: `Short label of what you are doing, shown to the user (at most ${MAX_SESSION_NAME_LENGTH} characters), e.g. "deploy shop".` },
+      },
+      required: ["server", "name"],
+    },
+  },
+  {
+    name: "close_session",
+    description:
+      "Close a session you opened when your task is done: its shell is closed and its pending requests are withdrawn. A session with a running request cannot be closed. The session_id can no longer be used afterwards.",
+    inputSchema: {
+      type: "object",
+      properties: { session_id: SESSION_ID_PROPERTY },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "enable_notifications",
+    description:
+      "Get notified of what happens in your session: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in your session, the user asks you to explain a command, or the user closes your session. " +
+      "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
+      "Call it once right after open_session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: SESSION_ID_PROPERTY,
         [WATCH_ARG]: {
           type: "object",
           description: "Filled in by the mcp-http-gateway relay, never by the agent: the relay will run the watcher and needs a watch specification instead of a local command",
         },
       },
+      required: ["session_id"],
     },
   },
   {
@@ -56,10 +85,11 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       "Reserved for the notification watcher that the mcp-http-gateway relay runs on the agent's machine: do not call it yourself. " +
       "To be notified, call enable_notifications; to read the outcome of a request, call get_result. " +
-      "Blocks until an event of this session happens after the cursor (a request finished, a command shared by the user, a question from the user), or until the timeout, and returns one line per event with the next cursor.",
+      "Blocks until an event of the session happens after the cursor (a request finished, a command shared by the user, a question from the user, the session closed by the user), or until the timeout, and returns one line per event with the next cursor.",
     inputSchema: {
       type: "object",
       properties: {
+        session_id: SESSION_ID_PROPERTY,
         cursor: { type: "string", pattern: "^[0-9]+$", description: "Cursor returned by the previous call. Omit to wait for requests finished from now on." },
         timeout_seconds: {
           type: "integer",
@@ -68,12 +98,13 @@ export const TOOL_DEFINITIONS: Tool[] = [
           description: `Maximum wait in seconds (default ${DEFAULT_NOTIFICATION_WAIT_SECONDS}).`,
         },
       },
+      required: ["session_id"],
     },
   },
   {
     name: "list_servers",
     description:
-      "List the SSH servers configured in the GUI, with their user, host, whether their connection has been tested, and their notes: the context gathered on each server (where the sites live, how apps are managed, rules to follow). " +
+      "List the SSH servers configured in the GUI, with their user, host, whether their connection has been tested, the agent sessions open on them, and their notes: the context gathered on each server (where the sites live, how apps are managed, rules to follow). " +
       "Read them before submitting commands. Commands can only be submitted to a tested server.",
     inputSchema: { type: "object", properties: {} },
   },
@@ -96,14 +127,14 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "submit_commands",
     description:
-      `Submit shell commands to run on a server. Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
-      `Approved commands run in order in a persistent bash shell (cd and export carry over between commands and between requests), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
+      `Submit shell commands to run in your session, on the server it was opened on (open_session). Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
+      `Approved commands run in order in the persistent bash shell of your session (cd and export carry over between commands and between your requests, never to other sessions), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
       `Execution stops at the first command that exits non-zero. Returns a request_id. Call enable_notifications first and keep working: you are notified when the request is finished, then read the outcome with get_result. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
     inputSchema: {
       type: "object",
       properties: {
-        server: { type: "string", description: "Server id or name, as returned by list_servers." },
+        session_id: SESSION_ID_PROPERTY,
         commands: {
           type: "array",
           items: { type: "string" },
@@ -113,7 +144,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
         },
         explanation: { type: "string", description: "Why these commands are needed and what they do, shown to the user above the commands." },
       },
-      required: ["server", "commands", "explanation"],
+      required: ["session_id", "commands", "explanation"],
     },
   },
   {
@@ -176,8 +207,10 @@ export const TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
+const OpenSessionArgs = z.object({ server: z.string().min(1), name: z.string() });
+const SessionArgs = z.object({ session_id: z.string().min(1) });
 const SubmitArgs = z.object({
-  server: z.string().min(1),
+  session_id: z.string().min(1),
   commands: z.array(z.string()).min(1).max(MAX_COMMANDS_PER_REQUEST),
   explanation: z.string().trim().min(1, "explanation must not be empty"),
 });
@@ -192,8 +225,9 @@ const NotesArgs = z.object({
   notes: z.string(),
   mode: z.enum(["append", "replace"]).optional(),
 });
-const EnableArgs = z.object({ [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
+const EnableArgs = z.object({ session_id: z.string().min(1), [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
 const NotificationWaitArgs = z.object({
+  session_id: z.string().min(1),
   cursor: z.string().regex(/^[0-9]+$/).optional(),
   timeout_seconds: z.number().int().min(1).max(MAX_NOTIFICATION_WAIT_SECONDS).optional(),
 });
@@ -235,12 +269,46 @@ function listServers(ctx: ToolContext): CallToolResult {
         ? "ready"
         : "connection not tested yet: commands cannot be submitted";
     const head = `- ${s.id} — "${s.name}" — ${s.username}@${s.host}:${s.port} — ${state}`;
-    if (!s.notes) return `${head}\n  Notes: none yet. Record what you learn about this server with update_server_notes.`;
+    const open = ctx.sessions.listOpen(s.id);
+    const sessions = open.length
+      ? `  Open agent sessions: ${open.map((session) => `${session.id} "${session.name}" (opened ${session.openedAt})`).join(", ")}`
+      : "  Open agent sessions: none";
+    if (!s.notes) return `${head}\n${sessions}\n  Notes: none yet. Record what you learn about this server with update_server_notes.`;
     const author = s.notesUpdatedBy === "user" ? "the user" : "an agent";
     const indented = s.notes.split("\n").map((line) => `    ${line}`).join("\n");
-    return `${head}\n  Notes (last updated by ${author} on ${s.notesUpdatedAt}):\n${indented}`;
+    return `${head}\n${sessions}\n  Notes (last updated by ${author} on ${s.notesUpdatedAt}):\n${indented}`;
   });
   return text(blocks.join("\n\n"));
+}
+
+function assertUsable(server: StoredServer): void {
+  if (!server.publicKey) {
+    throw new GateError(`The user revoked the key of "${server.id}": SSH Gate has no access to it until they install a new key in the GUI.`);
+  }
+  if (!server.hostKeyFingerprint) {
+    throw new GateError(`The connection to "${server.id}" has never been tested. Ask the user to run "Tester la connexion" for this server in the GUI first.`);
+  }
+}
+
+function openSession(ctx: ToolContext, args: unknown): CallToolResult {
+  const { server: serverRef, name } = parse(OpenSessionArgs, args);
+  const server = ctx.servers.get(serverRef);
+  assertUsable(server);
+  const session = ctx.sessions.open(server.id, name);
+  ctx.ensureGui();
+  return text(
+    [
+      `Session ${session.id} opened on ${server.id} as "${session.name}".`,
+      `Pass session_id ${session.id} to submit_commands and to enable_notifications. Call enable_notifications now if you have not armed a watcher for this session.`,
+      "Its shell is your own: cd and export carry over between your requests and never leak to other sessions. Close it with close_session when your task is done.",
+    ].join("\n")
+  );
+}
+
+function closeSession(ctx: ToolContext, args: unknown): CallToolResult {
+  const { session_id } = parse(SessionArgs, args);
+  const session = ctx.sessions.close(session_id, "agent", ctx.requests);
+  return text(`Session ${session.id} closed. Its watcher stops by itself.`);
 }
 
 function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
@@ -254,22 +322,18 @@ function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
 }
 
 function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
-  const { server: serverRef, commands, explanation } = parse(SubmitArgs, args);
-  const server = ctx.servers.get(serverRef);
-  if (!server.publicKey) {
-    throw new GateError(`The user revoked the key of "${server.id}": SSH Gate has no access to it until they install a new key in the GUI.`);
-  }
-  if (!server.hostKeyFingerprint) {
-    throw new GateError(`The connection to "${server.id}" has never been tested. Ask the user to run "Tester la connexion" for this server in the GUI first.`);
-  }
-  const request = ctx.requests.create({ serverId: server.id, source: "agent", sessionId: ctx.sessionId, explanation, commands });
+  const { session_id, commands, explanation } = parse(SubmitArgs, args);
+  const session = ctx.sessions.getOpen(session_id);
+  const server = ctx.servers.get(session.serverId);
+  assertUsable(server);
+  const request = ctx.requests.create({ serverId: server.id, source: "agent", sessionId: session.id, explanation, commands });
   ctx.ensureGui();
   const url = ctx.guiUrl();
   const next =
     `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
     `If you have not called enable_notifications in this session, do it now.`;
   return text(
-    `Request ${request.id} submitted to ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
+    `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
   );
 }
 
@@ -280,46 +344,49 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
  */
 function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   const input = parse(EnableArgs, args);
+  const session = ctx.sessions.getOpen(input.session_id);
+  const description = `ssh-gate session ${session.id}`;
   if (input[WATCH_ARG]) {
     return {
       content: [{ type: "text", text: "Watch specification for the mcp-http-gateway relay." }],
       _meta: {
         [WATCH_META]: {
           tool: "wait_for_notifications",
-          arguments: {},
+          arguments: { session_id: session.id },
           cursor: String(Date.now()),
-          description: "ssh-gate requests and questions",
+          description,
         },
       },
     };
   }
 
-  writeHandoff(ctx.sessionId, ctx.dataDir);
-  const since = liveWatcherSince(ctx.dataDir, ctx.sessionId);
+  writeHandoff(session.id, ctx.dataDir);
+  const command = ctx.watchCommand(session.id);
+  const since = liveWatcherSince(ctx.dataDir, session.id);
   if (since) {
     return text(
       [
-        `Notifications are already live for this session (watcher armed since ${since}).`,
+        `Notifications are already live for session ${session.id} (watcher armed since ${since}).`,
         "Nothing to do: do not arm a second watcher, you would get every notification twice.",
         "Only if the host just told you your watcher expired or stopped, re-arm it with the same Monitor call:",
-        `command \`${ctx.watchCommand}\`, timeout_ms ${MONITOR_TIMEOUT_MS}.`,
+        `command \`${command}\`, timeout_ms ${MONITOR_TIMEOUT_MS}.`,
       ].join("\n")
     );
   }
   return text(
     [
-      "Notifications enabled for this session.",
+      `Notifications enabled for session ${session.id}.`,
       "",
       "Last step — call the Monitor tool now, with exactly these arguments:",
-      `  command:     ${ctx.watchCommand}`,
-      "  description: ssh-gate requests and questions",
+      `  command:     ${command}`,
+      `  description: ${description}`,
       `  timeout_ms:  ${MONITOR_TIMEOUT_MS}`,
       "",
-      "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request you submitted",
+      "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request of this session",
       "announces itself when its commands have all run, or when the user refused or interrupted it — one line per",
       "request. Read the outcome with get_result.",
       "When the user asks you to explain a command from the GUI, a line gives the statement, the request_id and the",
-      "question_id: answer it with answer_question.",
+      "question_id: answer it with answer_question. If the user closes the session, a line says so and the watcher stops.",
       "",
       "The host stops every monitor after 30 minutes at most. Each time it tells you this watcher expired, call",
       "Monitor again right away with the same arguments — do not call enable_notifications again. A request that",
@@ -341,12 +408,13 @@ function getResult(ctx: ToolContext, args: unknown): CallToolResult {
 
 /** Outil d'attente du veilleur du gateway : une ligne par événement après le curseur. */
 async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
-  const { cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
+  const { session_id, cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
+  const scanner = ctx.events(ctx.sessions.get(session_id).id);
   let cursor = rawCursor === undefined ? Date.now() : Number(rawCursor);
   const deadline = Date.now() + (timeout_seconds ?? DEFAULT_NOTIFICATION_WAIT_SECONDS) * 1000;
 
   for (;;) {
-    const events = ctx.events.since(cursor);
+    const events = scanner.since(cursor);
     if (events.length > 0 || Date.now() >= deadline || signal?.aborted) {
       cursor = advanceCursor(cursor, events);
       const lines = events.map(formatEvent);
@@ -395,6 +463,10 @@ function getHistory(ctx: ToolContext, args: unknown): CallToolResult {
 export async function callTool(ctx: ToolContext, name: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     switch (name) {
+      case "open_session":
+        return openSession(ctx, args);
+      case "close_session":
+        return closeSession(ctx, args);
       case "enable_notifications":
         return enableNotifications(ctx, args);
       case "wait_for_notifications":

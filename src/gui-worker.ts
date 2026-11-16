@@ -26,6 +26,7 @@ import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
 import { KeyService } from "./core/keys.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore, type ServerInput } from "./core/server-store.js";
+import { SessionStore } from "./core/session-store.js";
 import { SettingsStore } from "./core/settings-store.js";
 import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
@@ -53,7 +54,8 @@ process.on("unhandledRejection", (reason) => {
 const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
 const settings = new SettingsStore(config.dataDir);
-const executor = new Executor(servers, requests, (message) => logger.info(message));
+const sessions = new SessionStore(config.dataDir);
+const executor = new Executor(servers, requests, sessions, (message) => logger.info(message));
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
 const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
 
@@ -123,6 +125,11 @@ function serverInput(body: any): ServerInput {
   return { name: body?.name, host: body?.host, port: Number(body?.port), username: body?.username };
 }
 
+/** Session désignée par le paramètre ou le champ `session` : son identifiant, ou null pour la session « Vous ». */
+function sessionParam(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
 function commandIndex(c: Context): number {
   const index = Number(c.req.param("index"));
   if (!Number.isInteger(index) || index < 0) throw new GateError("Index de commande invalide.");
@@ -142,7 +149,8 @@ app.get(
   handle((c): RequestsResponse => {
     const server = servers.get(c.req.param("id")!);
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50) || 50, 1), 200);
-    return { requests: requests.listForServer(server.id, limit) };
+    const session = sessionParam(c.req.query("session"));
+    return { requests: requests.listForServer(server.id).filter((request) => request.sessionId === session).slice(-limit) };
   })
 );
 
@@ -186,7 +194,20 @@ app.put(
     return executor.view(servers.setNotes(server.id, body?.notes, "user", expected));
   })
 );
-app.post("/api/servers/:id/manual", handle(async (c) => executor.runManual(c.req.param("id")!, (await readBody(c))?.command)));
+app.post(
+  "/api/servers/:id/manual",
+  handle(async (c) => {
+    const body = await readBody(c);
+    return executor.runManual(c.req.param("id")!, sessionParam(body?.session), body?.command);
+  })
+);
+app.post(
+  "/api/sessions/:id/close",
+  handle((c) => {
+    executor.closeSession(c.req.param("id")!);
+    return { closed: true };
+  })
+);
 
 app.put("/api/requests/:id/commands/:index", handle(async (c) => executor.editCommand(c.req.param("id")!, commandIndex(c), (await readBody(c))?.command)));
 app.delete("/api/requests/:id/commands/:index", handle((c) => executor.removeCommand(c.req.param("id")!, commandIndex(c))));

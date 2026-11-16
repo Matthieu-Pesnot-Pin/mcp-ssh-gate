@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { isFinalStatus, type CommandStatus, type GateRequest, type RequestSource
 import { GateError } from "./errors.js";
 import { readJson, writeJsonAtomic } from "./files.js";
 import { RequestStore, readRequestFile } from "./request-store.js";
+import { SessionStore } from "./session-store.js";
 
 /** Durée maximale d'un Monitor côté hôte. */
 export const MONITOR_TIMEOUT_MS = 1_800_000;
@@ -15,11 +16,6 @@ const WATCHER_BEAT_MS = 5_000;
 const WATCHER_STALE_MS = 15_000;
 const HANDOFF_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const BACKOFF_MAX_MS = 30_000;
-
-/** Identifiant d'une session d'agent, c'est-à-dire d'un processus MCP. */
-export function newSessionId(): string {
-  return `ses_${randomBytes(8).toString("hex")}`;
-}
 
 // --- Événements à annoncer -----------------------------------------------------------
 
@@ -51,7 +47,17 @@ export interface QuestionAsked {
   eventMs: number;
 }
 
-export type GateEvent = FinishedRequest | QuestionAsked;
+/** Session fermée par l'utilisateur depuis l'interface. */
+export interface SessionClosed {
+  kind: "closed";
+  sessionId: string;
+  serverId: string;
+  name: string;
+  /** Instant de la fermeture. */
+  eventMs: number;
+}
+
+export type GateEvent = FinishedRequest | QuestionAsked | SessionClosed;
 
 interface CachedEntry {
   mtimeMs: number;
@@ -60,23 +66,26 @@ interface CachedEntry {
 }
 
 /**
- * Lit les événements à annoncer à une session : ses demandes une fois terminées, les
- * commandes que l'utilisateur a envoyées aux agents, et les questions de l'utilisateur
- * sur les commandes de la session ou sur les siennes. Le curseur est l'instant, en
- * millisecondes, du dernier événement déjà annoncé. Seuls les fichiers modifiés depuis
- * la lecture précédente sont relus.
+ * Lit les événements à annoncer à une session d'agent : ses demandes une fois
+ * terminées, les commandes que l'utilisateur y a tapées puis envoyées à l'agent, les
+ * questions de l'utilisateur sur ses commandes, et sa fermeture par l'utilisateur. Le
+ * curseur est l'instant, en millisecondes, du dernier événement déjà annoncé. Seuls les
+ * fichiers de demande modifiés depuis la lecture précédente sont relus.
  */
 export class RequestEventScanner {
   private readonly cache = new Map<string, CachedEntry>();
 
   constructor(
     private readonly requests: RequestStore,
+    private readonly sessions: SessionStore,
     private readonly session: string
   ) {}
 
   /** Événements à annoncer après `cursor`, dans l'ordre chronologique. */
   since(cursor: number): GateEvent[] {
     const found: GateEvent[] = [];
+    const closed = this.closedEvent();
+    if (closed && closed.eventMs > cursor) found.push(closed);
     for (const { file, mtimeMs } of this.requests.files()) {
       let entry = this.cache.get(file);
       if (!entry || entry.mtimeMs !== mtimeMs) {
@@ -92,12 +101,22 @@ export class RequestEventScanner {
     return found.sort((a, b) => a.eventMs - b.eventMs);
   }
 
+  /** Vrai quand la session est fermée, par l'agent ou par l'utilisateur. */
+  isClosed(): boolean {
+    return this.sessions.get(this.session).closedAt !== null;
+  }
+
+  private closedEvent(): SessionClosed | null {
+    const session = this.sessions.get(this.session);
+    if (!session.closedAt || session.closedBy !== "user") return null;
+    return { kind: "closed", sessionId: session.id, serverId: session.serverId, name: session.name, eventMs: Date.parse(session.closedAt) };
+  }
+
   private toEvents(request: GateRequest): GateEvent[] {
+    if (request.sessionId !== this.session) return [];
     const events: GateEvent[] = [];
     const finished = this.toFinished(request);
     if (finished) events.push(finished);
-    const concerned = request.source === "user" || request.sessionId === this.session;
-    if (!concerned) return events;
     for (const question of request.questions) {
       if (question.answer !== null) continue;
       events.push({
@@ -116,7 +135,7 @@ export class RequestEventScanner {
 
   private toFinished(request: GateRequest): FinishedRequest | null {
     if (!isFinalStatus(request.status) || request.status === "cancelled" || !request.finishedAt) return null;
-    const eventAt = request.source === "agent" ? (request.sessionId === this.session ? request.finishedAt : null) : request.sharedAt;
+    const eventAt = request.source === "agent" ? request.finishedAt : request.sharedAt;
     if (!eventAt) return null;
     return {
       kind: "finished",
@@ -144,7 +163,21 @@ function oneLine(text: string, max: number): string {
 
 /** Ligne de notification : une seule ligne, lisible telle quelle par l'agent. */
 export function formatEvent(event: GateEvent): string {
-  return event.kind === "question" ? formatQuestion(event) : formatFinished(event);
+  switch (event.kind) {
+    case "question":
+      return formatQuestion(event);
+    case "closed":
+      return formatClosed(event);
+    default:
+      return formatFinished(event);
+  }
+}
+
+function formatClosed(event: SessionClosed): string {
+  return (
+    `[ssh-gate] ${event.serverId} — the user closed your session ${event.sessionId} ("${oneLine(event.name, 60)}"): its shell is gone and its pending requests were withdrawn. ` +
+    `Open a new session with open_session if you still need to run commands.`
+  );
 }
 
 function formatQuestion(event: QuestionAsked): string {
@@ -180,7 +213,8 @@ function formatFinished(request: FinishedRequest): string {
       outcome = request.status;
   }
   const note = request.note && request.status !== "refused" ? " — the user left a note" : "";
-  const subject = request.source === "user" ? `the user shared ${total} command(s) they ran themselves (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
+  const subject =
+    request.source === "user" ? `the user shared ${total} command(s) they ran themselves in your session (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
   return `[ssh-gate] ${request.serverId} — ${subject}${note} — read it with get_result, request_id ${request.id}`;
 }
 
@@ -269,8 +303,8 @@ export function liveWatcherSince(dataDir: string, session: string): string | nul
 /**
  * Mode veilleur local (`--watch <session>`). Une ligne sur stdout par événement
  * de la session : l'outil Monitor de l'hôte réveille l'agent à chaque ligne. Le journal
- * et les erreurs partent sur stderr. Une erreur de lecture se traduit par un réessai,
- * jamais par une sortie.
+ * et les erreurs partent sur stderr. Une erreur de lecture se traduit par un réessai ;
+ * le veilleur s'arrête une fois la session fermée et sa fermeture annoncée.
  */
 export async function runWatchMode(session: string | null): Promise<void> {
   if (!session) throw new GateError("--watch needs a session id: `mcp-ssh-gate --watch <session>`. Call enable_notifications to get the exact command.");
@@ -279,7 +313,7 @@ export async function runWatchMode(session: string | null): Promise<void> {
     throw new GateError(`No notification handoff for session ${session}: call enable_notifications in that MCP session first.`);
   }
 
-  const scanner = new RequestEventScanner(new RequestStore(handoff.dataDir), session);
+  const scanner = new RequestEventScanner(new RequestStore(handoff.dataDir), new SessionStore(handoff.dataDir), session);
   const since = new Date().toISOString();
   let cursor = handoff.cursor;
   let lastBeat = 0;
@@ -292,11 +326,16 @@ export async function runWatchMode(session: string | null): Promise<void> {
         writeJsonAtomic(watcherBeatPath(handoff.dataDir, session), { since, updatedAt: Date.now() });
         lastBeat = Date.now();
       }
+      const closed = scanner.isClosed();
       const events = scanner.since(cursor);
       if (events.length > 0) {
         for (const event of events) process.stdout.write(`${formatEvent(event)}\n`);
         cursor = advanceCursor(cursor, events);
         saveHandoff({ session, dataDir: handoff.dataDir, cursor });
+      }
+      if (closed) {
+        process.stderr.write(`[ssh-gate] session ${session} is closed: the watcher stops\n`);
+        return;
       }
       backoff = SCAN_INTERVAL_MS;
       await sleep(SCAN_INTERVAL_MS);

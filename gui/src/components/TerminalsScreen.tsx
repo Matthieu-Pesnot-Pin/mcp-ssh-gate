@@ -31,7 +31,8 @@ const TERMINAL_THEME = {
   brightWhite: '#eceef3',
 }
 
-function label(terminal: TerminalView): string {
+function label(terminal: TerminalView, scoped: boolean): string {
+  if (scoped) return `Terminal ${terminal.number}`
   return terminal.number > 1 ? `${terminal.serverName} · ${terminal.number}` : terminal.serverName
 }
 
@@ -148,13 +149,20 @@ function NewTerminalMenu({ servers, terminals, onOpen }: { servers: ServerView[]
 
 interface Props {
   servers: ServerView[]
+  /** Serveur dont la vue montre les terminaux ; null pour les terminaux de tous les serveurs. */
+  server: ServerView | null
   terminals: TerminalView[]
   onChanged: () => void
   onError: (message: string) => void
 }
 
-/** Vue Terminaux : un onglet par session interactive, sur n'importe quel serveur. */
-export function TerminalsScreen({ servers, terminals, onChanged, onError }: Props) {
+/**
+ * Vue Terminaux : un onglet par session interactive, sur tous les serveurs ou sur un seul.
+ * Sur un serveur, « Nouveau terminal » l'ouvre directement sur lui.
+ */
+export function TerminalsScreen({ servers, server, terminals: allTerminals, onChanged, onError }: Props) {
+  const terminals = server ? allTerminals.filter((t) => t.serverId === server.id) : allTerminals
+  const scoped = server !== null
   const [activeId, setActiveId] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const [opening, setOpening] = useState(false)
@@ -173,11 +181,11 @@ export function TerminalsScreen({ servers, terminals, onChanged, onError }: Prop
     return () => document.removeEventListener('mousedown', close)
   }, [picking])
 
-  async function open(server: ServerView) {
+  async function open(target: ServerView) {
     setPicking(false)
     setOpening(true)
     try {
-      const terminal = await api.openTerminal(server.id, 80, 24)
+      const terminal = await api.openTerminal(target.id, 80, 24)
       setActiveId(terminal.id)
       onChanged()
     } catch (err) {
@@ -200,7 +208,14 @@ export function TerminalsScreen({ servers, terminals, onChanged, onError }: Prop
     }
   }
 
-  const picker = (
+  const serverReady = server !== null && isReady(server)
+  const newTerminal = () => (server ? void open(server) : setPicking(true))
+  const picker = server ? (
+    <button className="btn btn-secondary" onClick={newTerminal} disabled={opening || !serverReady} title={serverReady ? undefined : server.publicKey ? 'Teste d’abord la connexion' : 'Clé révoquée'}>
+      <Plus size={16} />
+      {opening ? 'Connexion…' : 'Nouveau terminal'}
+    </button>
+  ) : (
     <div className="menu-anchor" ref={pickerRef}>
       <button className="btn btn-secondary" onClick={() => setPicking(!picking)} disabled={opening}>
         <Plus size={16} />
@@ -214,7 +229,7 @@ export function TerminalsScreen({ servers, terminals, onChanged, onError }: Prop
     <main className="main">
       <header className="topbar">
         <div style={{ minWidth: 0 }}>
-          <div className="topbar-title">Terminaux</div>
+          <div className="topbar-title">{server ? `Terminaux · ${server.name}` : 'Terminaux'}</div>
           <div className="topbar-sub">
             {openCount > 0 ? `${plural(openCount, 'session ouverte', 'sessions ouvertes')} · elles restent actives si tu fermes la page` : 'Aucune session ouverte'}
           </div>
@@ -227,23 +242,25 @@ export function TerminalsScreen({ servers, terminals, onChanged, onError }: Prop
         <div className="empty">
           <SquareTerminal size={40} />
           <div className="empty-title">Aucun terminal ouvert</div>
-          <p>Ouvre un terminal sur l'un de tes serveurs. Il reste actif si tu fermes la page, et l'agent n'y a pas accès.</p>
+          <p>
+            {server ? `Ouvre un terminal sur ${server.name}.` : "Ouvre un terminal sur l'un de tes serveurs."} Il reste actif si tu fermes la page, et l'agent n'y a pas accès.
+          </p>
         </div>
       ) : (
         <>
           <div className="term-tabs" role="tablist">
             {terminals.map((terminal) => (
               <div key={terminal.id} role="tab" aria-selected={terminal.id === active?.id} className={`term-tab${terminal.id === active?.id ? ' active' : ''}`}>
-                <button className="term-tab-label" onClick={() => setActiveId(terminal.id)} title={label(terminal)}>
+                <button className="term-tab-label" onClick={() => setActiveId(terminal.id)} title={label(terminal, scoped)}>
                   <span className={`dot small${terminal.status === 'open' ? ' on' : ''}`} />
-                  {label(terminal)}
+                  {label(terminal, scoped)}
                 </button>
                 <button className="term-tab-close" title="Fermer la session" onClick={() => void close(terminal)}>
                   <X size={14} />
                 </button>
               </div>
             ))}
-            <button className="icon-btn term-tab-add" title="Nouveau terminal" onClick={() => setPicking(true)} disabled={opening}>
+            <button className="icon-btn term-tab-add" title="Nouveau terminal" onClick={newTerminal} disabled={opening || (scoped && !serverReady)}>
               <Plus size={18} />
             </button>
           </div>

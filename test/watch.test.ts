@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { GateRequest } from "../shared/model.js";
 import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
+import { SessionStore } from "../src/core/session-store.js";
 import { generateVaultKey, parseVaultKey } from "../src/core/vault.js";
 import { RequestEventScanner, formatEvent, liveWatcherSince, writeHandoff } from "../src/core/watch.js";
 import { callTool, type ToolContext } from "../src/tools/tools.js";
@@ -47,25 +48,46 @@ function withHome<T>(home: string, fn: () => T): T {
   }
 }
 
-function startWatcher(home: string, session: string): { child: ChildProcess; output: () => string } {
+function startWatcher(home: string, session: string): { child: ChildProcess; output: () => string; exited: () => boolean } {
   const child = spawn(process.execPath, [entry, "--watch", session], { env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
+  let exited = false;
   child.stdout!.on("data", (chunk) => (stdout += chunk.toString("utf8")));
-  return { child, output: () => stdout };
+  child.on("exit", () => (exited = true));
+  return { child, output: () => stdout, exited: () => exited };
 }
 
-test("the local watcher announces each finished request of its session once, and resumes after a restart", async (t) => {
+function toolContext(dataDir: string): ToolContext {
+  const requests = new RequestStore(dataDir);
+  const sessions = new SessionStore(dataDir);
+  return {
+    servers: new ServerStore(dataDir, parseVaultKey(generateVaultKey())),
+    requests,
+    sessions,
+    ensureGui: () => {},
+    guiUrl: () => null,
+    reconnectGui: async () => ({ content: [] }),
+    dataDir,
+    watchCommand: (id) => `watch ${id}`,
+    events: (id) => new RequestEventScanner(requests, sessions, id),
+  };
+}
+
+test("the local watcher announces each finished request of its session once, resumes after a restart, and stops when the user closes the session", async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-home-"));
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-watch-"));
-  withHome(home, () => writeHandoff("ses_mine", dataDir));
+  const sessions = new SessionStore(dataDir);
+  const own = sessions.open("web", "deploy");
+  const foreign = sessions.open("web", "logs");
+  withHome(home, () => writeHandoff(own.id, dataDir));
 
   const store = new RequestStore(dataDir);
-  const mine = store.create({ serverId: "web", source: "agent", sessionId: "ses_mine", explanation: "x", commands: ["ls", "pwd"] });
-  const other = store.create({ serverId: "web", source: "agent", sessionId: "ses_other", explanation: "y", commands: ["id"] });
+  const mine = store.create({ serverId: "web", source: "agent", sessionId: own.id, explanation: "x", commands: ["ls", "pwd"] });
+  const other = store.create({ serverId: "web", source: "agent", sessionId: foreign.id, explanation: "y", commands: ["id"] });
 
-  const first = startWatcher(home, "ses_mine");
+  const first = startWatcher(home, own.id);
   t.after(() => first.child.kill());
-  await waitFor(() => liveWatcherSince(dataDir, "ses_mine") !== null, "the watcher heartbeat");
+  await waitFor(() => liveWatcherSince(dataDir, own.id) !== null, "the watcher heartbeat");
   finish(store, other.id);
   finish(store, mine.id);
   await waitFor(() => first.output().includes(mine.id), "the first notification");
@@ -75,64 +97,67 @@ test("the local watcher announces each finished request of its session once, and
   ]);
   first.child.kill();
 
-  const late = store.create({ serverId: "web", source: "agent", sessionId: "ses_mine", explanation: "z", commands: ["uptime"] });
+  const late = store.create({ serverId: "web", source: "agent", sessionId: own.id, explanation: "z", commands: ["uptime"] });
   finish(store, late.id);
 
-  const second = startWatcher(home, "ses_mine");
+  const second = startWatcher(home, own.id);
   t.after(() => second.child.kill());
   await waitFor(() => second.output().includes(late.id), "the notification of the request finished between watchers");
   await new Promise((resolve) => setTimeout(resolve, 1500));
   assert.equal(second.output().trim().split("\n").length, 1);
+
+  sessions.close(own.id, "user", store);
+  await waitFor(() => second.exited(), "the watcher to stop");
+  assert.match(second.output().trim().split("\n")[1], new RegExp(`^\\[ssh-gate\\] web — the user closed your session ${own.id} \\("deploy"\\)`));
 });
 
-test("behind the gateway: enable_notifications returns a watch specification and the wait tool returns events", async () => {
+test("behind the gateway: enable_notifications returns a watch specification and the wait tool returns the events of the session", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-gw-"));
-  const requests = new RequestStore(dataDir);
-  const ctx: ToolContext = {
-    servers: new ServerStore(dataDir, parseVaultKey(generateVaultKey())),
-    requests,
-    ensureGui: () => {},
-    guiUrl: () => null,
-    reconnectGui: async () => ({ content: [] }),
-    sessionId: "ses_gw",
-    dataDir,
-    watchCommand: "",
-    events: new RequestEventScanner(requests, "ses_gw"),
-  };
+  const ctx = toolContext(dataDir);
+  const { requests } = ctx;
+  const session = ctx.sessions.open("db", "migration");
 
-  const enabled = await callTool(ctx, "enable_notifications", { _gateway_watch: { version: 1 } });
+  const refused = await callTool(ctx, "enable_notifications", { _gateway_watch: { version: 1 } });
+  assert.equal(refused.isError, true);
+
+  const enabled = await callTool(ctx, "enable_notifications", { session_id: session.id, _gateway_watch: { version: 1 } });
   const spec = enabled._meta?.["gateway/watch"] as { tool: string; arguments: object; cursor: string; description: string };
   assert.equal(spec.tool, "wait_for_notifications");
-  assert.deepEqual(spec.arguments, {});
+  assert.deepEqual(spec.arguments, { session_id: session.id });
   assert.match(spec.cursor, /^\d+$/);
 
   await new Promise((resolve) => setTimeout(resolve, 5));
-  const mine = requests.create({ serverId: "db", source: "agent", sessionId: "ses_gw", explanation: "", commands: ["a", "b"] });
+  const mine = requests.create({ serverId: "db", source: "agent", sessionId: session.id, explanation: "", commands: ["a", "b"] });
   const typed = requests.create({ serverId: "db", source: "user", sessionId: null, explanation: "", commands: ["c"] });
-  finish(requests, typed.id);
+  finish(requests, typed.id, (draft) => {
+    draft.sharedAt = new Date().toISOString();
+  });
   finish(requests, mine.id, (draft) => {
     draft.status = "failed";
     draft.commands[1].status = "failed";
     draft.commands[1].exitCode = 2;
   });
 
-  const first = await callTool(ctx, "wait_for_notifications", { cursor: spec.cursor, timeout_seconds: 5 });
+  const first = await callTool(ctx, "wait_for_notifications", { session_id: session.id, cursor: spec.cursor, timeout_seconds: 5 });
   const events = first._meta?.["gateway/events"] as { cursor: string; lines: string[] };
   assert.deepEqual(events.lines, [
     `[ssh-gate] db — request ${mine.id} failed at command 2/2 (exit 2) — read it with get_result, request_id ${mine.id}`,
   ]);
   assert.ok(Number(events.cursor) > Number(spec.cursor));
 
-  const second = await callTool(ctx, "wait_for_notifications", { cursor: events.cursor, timeout_seconds: 1 });
+  const second = await callTool(ctx, "wait_for_notifications", { session_id: session.id, cursor: events.cursor, timeout_seconds: 1 });
   assert.deepEqual((second._meta?.["gateway/events"] as { lines: string[] }).lines, []);
 });
 
-test("a command typed by the user is announced to every session once the user shares it", async () => {
+test("a command the user typed in an agent session reaches that agent alone, once shared", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-share-"));
   const store = new RequestStore(dataDir);
-  const typed = store.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["df -h"] });
+  const sessions = new SessionStore(dataDir);
+  const own = sessions.open("web", "disk");
+  const other = sessions.open("web", "logs");
+  const typed = store.create({ serverId: "web", source: "user", sessionId: own.id, explanation: "", commands: ["df -h"] });
   finish(store, typed.id);
-  const scanner = new RequestEventScanner(store, "ses_any");
+  const scanner = new RequestEventScanner(store, sessions, own.id);
   assert.deepEqual(scanner.since(0), []);
 
   await new Promise((resolve) => setTimeout(resolve, 5));
@@ -142,54 +167,85 @@ test("a command typed by the user is announced to every session once the user sh
     draft.sharedAt = new Date().toISOString();
   });
   const [shared] = scanner.since(cursor);
-  assert.equal(formatEvent(shared), `[ssh-gate] web — the user shared 1 command(s) they ran themselves (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with get_result, request_id ${typed.id}`);
-  assert.deepEqual(new RequestEventScanner(store, "ses_other").since(cursor).map((r) => r.id), [typed.id]);
+  assert.equal(
+    formatEvent(shared),
+    `[ssh-gate] web — the user shared 1 command(s) they ran themselves in your session (request ${typed.id}), completed: 1/1 command(s) succeeded — read it with get_result, request_id ${typed.id}`
+  );
+  assert.deepEqual(new RequestEventScanner(store, sessions, other.id).since(cursor), []);
   assert.deepEqual(scanner.since(shared.eventMs), []);
 });
 
 test("event lines describe refusals", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-event-"));
   const store = new RequestStore(dataDir);
-  const request = store.create({ serverId: "db", source: "agent", sessionId: "s", explanation: "", commands: ["rm x"] });
+  const sessions = new SessionStore(dataDir);
+  const session = sessions.open("db", "cleanup");
+  const request = store.create({ serverId: "db", source: "agent", sessionId: session.id, explanation: "", commands: ["rm x"] });
   store.update(request.id, (d) => {
     d.status = "refused";
     d.note = "pas en prod\naujourd'hui";
     d.finishedAt = new Date().toISOString();
   });
-  const [refused] = new RequestEventScanner(store, "s").since(0);
+  const [refused] = new RequestEventScanner(store, sessions, session.id).since(0);
   assert.match(formatEvent(refused), /request \S+ refused by the user: pas en prod aujourd'hui —/);
+});
+
+test("sessions: submit_commands needs an open session, close_session withdraws its pending requests and stays silent", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-sessions-"));
+  const ctx = toolContext(dataDir);
+  ctx.servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
+  const read = async (name: string, args: unknown) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
+
+  assert.match(await read("open_session", { server: "web", name: "deploy" }), /has never been tested/);
+  ctx.servers.setFingerprint("web", "SHA256:abc");
+  const opened = await read("open_session", { server: "web", name: "  deploy   shop " });
+  const id = /Session (sh_[0-9a-f]{8}) opened on web as "deploy shop"/.exec(opened)?.[1];
+  assert.ok(id, opened);
+  assert.match(await read("list_servers", {}), new RegExp(`Open agent sessions: ${id} "deploy shop"`));
+
+  assert.match(await read("submit_commands", { session_id: "sh_00000000", commands: ["ls"], explanation: "x" }), /Unknown session/);
+  assert.match(await read("submit_commands", { session_id: id, commands: ["ls"], explanation: "list" }), /submitted to session sh_[0-9a-f]{8} on web/);
+  const [pending] = ctx.requests.listOpen();
+  assert.equal(pending.sessionId, id);
+
+  ctx.requests.update(pending.id, (draft) => {
+    draft.status = "running";
+  });
+  assert.match(await read("close_session", { session_id: id }), /is running/);
+  ctx.requests.update(pending.id, (draft) => {
+    draft.status = "pending";
+  });
+
+  assert.match(await read("close_session", { session_id: id }), /closed/);
+  assert.equal(ctx.requests.get(pending.id).status, "cancelled");
+  assert.deepEqual(ctx.events(id!).since(0), []);
+  assert.match(await read("submit_commands", { session_id: id, commands: ["ls"], explanation: "again" }), /was closed by an agent/);
+  assert.match(await read("enable_notifications", { session_id: id }), /was closed by an agent/);
+  assert.match(await read("list_servers", {}), /Open agent sessions: none/);
 });
 
 test("questions: announced to the session of the request, answered once with answer_question, then silent", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-question-"));
-  const requests = new RequestStore(dataDir);
-  const ctx: ToolContext = {
-    servers: new ServerStore(dataDir, parseVaultKey(generateVaultKey())),
-    requests,
-    ensureGui: () => {},
-    guiUrl: () => null,
-    reconnectGui: async () => ({ content: [] }),
-    sessionId: "ses_q",
-    dataDir,
-    watchCommand: "",
-    events: new RequestEventScanner(requests, "ses_q"),
-  };
-  const request = requests.create({ serverId: "web", source: "agent", sessionId: "ses_q", explanation: "", commands: ["hostname; df -h /"] });
+  const ctx = toolContext(dataDir);
+  const { requests } = ctx;
+  const session = ctx.sessions.open("web", "disk");
+  const other = ctx.sessions.open("web", "logs");
+  const request = requests.create({ serverId: "web", source: "agent", sessionId: session.id, explanation: "", commands: ["hostname; df -h /"] });
   requests.update(request.id, (draft) => {
     draft.questions.push({ id: "q_1", commandIndex: 0, statement: "df -h /", askedAt: new Date().toISOString(), answer: null, answeredAt: null });
   });
 
-  const [asked] = ctx.events.since(0);
+  const [asked] = ctx.events(session.id).since(0);
   assert.equal(
     formatEvent(asked),
     `[ssh-gate] web — the user asks you to explain part of command 1/1 of request ${request.id}: df -h / — answer with answer_question, request_id ${request.id}, question_id q_1`
   );
-  assert.deepEqual(new RequestEventScanner(requests, "ses_other").since(0), []);
+  assert.deepEqual(ctx.events(other.id).since(0), []);
 
   const answered = await callTool(ctx, "answer_question", { request_id: request.id, question_id: "q_1", answer: "Affiche l'espace disque de la racine." });
   assert.equal(answered.isError, undefined);
   assert.equal(requests.get(request.id).questions[0].answer, "Affiche l'espace disque de la racine.");
-  assert.deepEqual(ctx.events.since(0), []);
+  assert.deepEqual(ctx.events(session.id).since(0), []);
 
   const again = await callTool(ctx, "answer_question", { request_id: request.id, question_id: "q_1", answer: "Encore." });
   assert.equal(again.isError, true);

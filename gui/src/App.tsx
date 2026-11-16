@@ -13,23 +13,49 @@ type Dialog = { kind: 'add' | 'settings' } | { kind: 'key' | 'edit' | 'delete' |
 
 const TERMINALS_HASH = '#terminaux'
 
-function selectedFromHash(): string | null {
-  const match = /^#\/([^/]+)$/.exec(window.location.hash)
-  return match ? decodeURIComponent(match[1]) : null
+interface TerminalsView {
+  /** Serveur dont on montre les terminaux ; null pour tous les serveurs. */
+  serverId: string | null
+}
+
+/** Adresse de la vue Terminaux : `#terminaux` pour tous les serveurs, `#terminaux/<serveur>` pour un seul. */
+function terminalsFromHash(): TerminalsView | null {
+  const match = /^#terminaux(?:\/([^/]+))?$/.exec(window.location.hash)
+  return match ? { serverId: match[1] ? decodeURIComponent(match[1]) : null } : null
+}
+
+function terminalsHash(serverId: string | null): string {
+  return serverId ? `${TERMINALS_HASH}/${encodeURIComponent(serverId)}` : TERMINALS_HASH
+}
+
+interface Selection {
+  serverId: string
+  /** Session d'agent ; null pour la session « Vous ». */
+  sessionId: string | null
+}
+
+/** Adresse d'une session : `#/<serveur>` pour la session « Vous », `#/<serveur>/<session>` pour une session d'agent. */
+function selectionFromHash(): Selection | null {
+  const match = /^#\/([^/]+)(?:\/([^/]+))?$/.exec(window.location.hash)
+  return match ? { serverId: decodeURIComponent(match[1]), sessionId: match[2] ? decodeURIComponent(match[2]) : null } : null
+}
+
+function sessionHash(serverId: string, sessionId: string | null): string {
+  return `#/${encodeURIComponent(serverId)}${sessionId ? `/${encodeURIComponent(sessionId)}` : ''}`
 }
 
 export default function App() {
   const state = usePolling('state', api.state, 2000)
   const terminals = usePolling('terminals', api.terminals, 2500)
-  const [selectedId, setSelectedId] = useState<string | null>(selectedFromHash)
-  const [terminalsOpen, setTerminalsOpen] = useState(window.location.hash === TERMINALS_HASH)
+  const [selection, setSelection] = useState<Selection | null>(selectionFromHash)
+  const [terminalsView, setTerminalsView] = useState<TerminalsView | null>(terminalsFromHash)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   useEffect(() => {
     const onHash = () => {
-      setSelectedId(selectedFromHash())
-      setTerminalsOpen(window.location.hash === TERMINALS_HASH)
+      setSelection(selectionFromHash())
+      setTerminalsView(terminalsFromHash())
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -50,10 +76,23 @@ export default function App() {
   const servers = state.data?.servers ?? []
   const terminalList = terminals.data?.terminals ?? []
   const firstPending = servers.find((s) => s.pendingCount > 0)
-  const selected = servers.find((s) => s.id === selectedId) ?? firstPending ?? servers[0] ?? null
+  const selected = servers.find((s) => s.id === selection?.serverId) ?? firstPending ?? servers[0] ?? null
+  const wantedSessionId = selected && selected.id === selection?.serverId ? selection.sessionId : selected?.sessions.find((s) => s.pendingCount > 0)?.id ?? null
+  const selectedSession = selected?.sessions.find((s) => s.id === wantedSessionId) ?? null
+  const sessionGone = !!selected && !!wantedSessionId && !selectedSession
+  const terminalsServer = terminalsView?.serverId ? servers.find((s) => s.id === terminalsView.serverId) ?? null : null
+  const terminalsServerGone = !!state.data && !!terminalsView?.serverId && !terminalsServer
 
-  function select(id: string) {
-    window.location.hash = `#/${encodeURIComponent(id)}`
+  useEffect(() => {
+    if (sessionGone && selected) window.location.hash = sessionHash(selected.id, null)
+  }, [sessionGone, selected])
+
+  useEffect(() => {
+    if (terminalsServerGone) window.location.hash = TERMINALS_HASH
+  }, [terminalsServerGone])
+
+  function select(id: string, sessionId: string | null = null) {
+    window.location.hash = sessionHash(id, sessionId)
   }
 
   function onSaved(server: ServerView) {
@@ -76,21 +115,31 @@ export default function App() {
     <div className="app">
       <Sidebar
         servers={servers}
-        selectedId={selected?.id ?? null}
-        terminalsOpen={terminalsOpen}
-        terminalCount={terminalList.length}
+        selectedId={terminalsView ? terminalsView.serverId : selected?.id ?? null}
+        selectedSessionId={selectedSession?.id ?? null}
+        onSelectSession={select}
+        terminalsView={terminalsView}
+        terminals={terminalList}
         onSelect={select}
-        onOpenTerminals={() => (window.location.hash = TERMINALS_HASH)}
+        onOpenTerminals={(serverId) => (window.location.hash = terminalsHash(serverId))}
         onAdd={() => setDialog({ kind: 'add' })}
         onSettings={() => setDialog({ kind: 'settings' })}
       />
 
-      {terminalsOpen ? (
-        <TerminalsScreen servers={servers} terminals={terminalList} onChanged={terminals.reload} onError={setNotice} />
+      {terminalsView ? (
+        <TerminalsScreen
+          key={terminalsView.serverId ?? ''}
+          servers={servers}
+          server={terminalsServer}
+          terminals={terminalList}
+          onChanged={terminals.reload}
+          onError={setNotice}
+        />
       ) : selected ? (
         <ServerScreen
           key={selected.id}
           server={selected}
+          session={selectedSession ?? selected.sessions[0]}
           onChanged={state.reload}
           onError={setNotice}
           onShowKey={() => setDialog({ kind: 'key', server: selected })}

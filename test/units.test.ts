@@ -8,6 +8,7 @@ import { decryptSecret, encryptSecret, generateVaultKey, parseVaultKey } from ".
 import { CommandOutputParser } from "../src/core/ssh-session.js";
 import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
+import { SessionStore } from "../src/core/session-store.js";
 import { formatRequest } from "../src/tools/format.js";
 import { runSetupMcp } from "../src/cli/setup-mcp.js";
 import { callTool } from "../src/tools/tools.js";
@@ -64,7 +65,18 @@ test("server notes: the agent appends or replaces, a stale user edit is refused"
   const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dir);
   servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
-  const ctx = { servers, requests, ensureGui: () => {}, guiUrl: () => null, reconnectGui: async () => ({ content: [] }), sessionId: "ses_test", dataDir: dir, watchCommand: "", events: new RequestEventScanner(requests, "ses_test") };
+  const sessions = new SessionStore(dir);
+  const ctx = {
+    servers,
+    requests,
+    sessions,
+    ensureGui: () => {},
+    guiUrl: () => null,
+    reconnectGui: async () => ({ content: [] }),
+    dataDir: dir,
+    watchCommand: (id: string) => id,
+    events: (id: string) => new RequestEventScanner(requests, sessions, id),
+  };
   const read = async (name: string, args: unknown = {}) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
 
   assert.match(await read("list_servers"), /Notes: none yet/);

@@ -35,7 +35,8 @@ const req = (id: string) => `requests/${encodeURIComponent(id)}`
 
 export const api = {
   state: () => request<StateResponse>('state'),
-  requests: (serverId: string) => request<RequestsResponse>(`${server(serverId)}/requests?limit=60`),
+  requests: (serverId: string, sessionId: string | null) =>
+    request<RequestsResponse>(`${server(serverId)}/requests?limit=60${sessionId ? `&session=${encodeURIComponent(sessionId)}` : ''}`),
   addServer: (fields: ServerFields) => send<ServerView>('POST', 'servers', fields),
   updateServer: (id: string, fields: ServerFields) => send<ServerView>('PUT', server(id), fields),
   deleteServer: (id: string) => send<{ deleted: true }>('DELETE', server(id)),
@@ -47,7 +48,8 @@ export const api = {
   updateNotes: (id: string, notes: string, expectedUpdatedAt: string | null) =>
     send<ServerView>('PUT', `${server(id)}/notes`, { notes, expectedUpdatedAt }),
   disconnect: (id: string) => send<ServerView>('POST', `${server(id)}/disconnect`),
-  runManual: (id: string, command: string) => send<GateRequest>('POST', `${server(id)}/manual`, { command }),
+  runManual: (id: string, sessionId: string | null, command: string) => send<GateRequest>('POST', `${server(id)}/manual`, { command, session: sessionId }),
+  closeSession: (sessionId: string) => send<{ closed: true }>('POST', `sessions/${encodeURIComponent(sessionId)}/close`),
   editCommand: (id: string, index: number, command: string) => send<GateRequest>('PUT', `${req(id)}/commands/${index}`, { command }),
   removeCommand: (id: string, index: number) => send<GateRequest>('DELETE', `${req(id)}/commands/${index}`),
   approve: (id: string, note: string) => send<GateRequest>('POST', `${req(id)}/approve`, { note }),

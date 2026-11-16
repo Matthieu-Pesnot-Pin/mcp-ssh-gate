@@ -18,6 +18,7 @@ import { connectSsh } from "../src/core/ssh-session.js";
 import { DEDICATED_KEY_FILE, installCommand, keyLine } from "../shared/install.js";
 import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
+import { SessionStore } from "../src/core/session-store.js";
 import { generateVaultKey, parseVaultKey } from "../src/core/vault.js";
 
 interface FakeSsh {
@@ -125,12 +126,13 @@ async function waitFinal(requests: RequestStore, id: string): Promise<GateReques
   throw new Error(`Request ${id} did not finish`);
 }
 
-test("approved commands run in a persistent shell and stop at the first failure", async (t) => {
+test("approved commands run in the persistent shell of their session and stop at the first failure", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-exec-"));
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-work-"));
   const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dataDir);
-  const executor = new Executor(servers, requests, () => {});
+  const sessions = new SessionStore(dataDir);
+  const executor = new Executor(servers, requests, sessions, () => {});
 
   const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
   const fake = await startFakeSshServer({ key: placeholder.publicKey! });
@@ -144,11 +146,12 @@ test("approved commands run in a persistent shell and stop at the first failure"
   assert.match(tested.fingerprint, /^SHA256:/);
   assert.equal(servers.get("local").hostKeyFingerprint, tested.fingerprint);
 
+  const deploy = sessions.open("local", "deploy");
   const workPath = workDir.replace(/\\/g, "/");
   const batch = requests.create({
     serverId: "local",
     source: "agent",
-    sessionId: null,
+    sessionId: deploy.id,
     explanation: "test",
     commands: [`cd '${workPath}'`, "export GREETING=hello", "echo \"$GREETING from $(basename \"$PWD\")\"; echo oops >&2", "read -r line; echo \"read status $?\"", "false", "echo never"],
   });
@@ -167,21 +170,50 @@ test("approved commands run in a persistent shell and stop at the first failure"
   assert.equal(done.commands[4].exitCode, 7);
   assert.equal(done.commands[4].original, "false");
 
-  const manual = executor.runManual("local", "echo $GREETING again");
+  const manual = executor.runManual("local", deploy.id, "echo $GREETING again");
   const manualDone = await waitFinal(requests, manual.id);
   assert.equal(manualDone.status, "completed");
+  assert.equal(manualDone.sessionId, deploy.id);
   assert.equal(manualDone.commands[0].output, "hello again\n");
 
-  const broken = requests.create({ serverId: "local", source: "agent", sessionId: null, explanation: "syntax", commands: ["echo 'unclosed", "echo after"] });
+  const logs = sessions.open("local", "logs");
+  const isolated = requests.create({ serverId: "local", source: "agent", sessionId: logs.id, explanation: "env", commands: ['echo "[$GREETING]"; basename "$PWD"'] });
+  executor.approve(isolated.id, null);
+  const isolatedDone = await waitFinal(requests, isolated.id);
+  assert.match(isolatedDone.commands[0].output, /^\[\]\n/);
+  assert.ok(!isolatedDone.commands[0].output.includes(path.basename(workDir)));
+  const own = await waitFinal(requests, executor.runManual("local", null, 'echo "[$GREETING]"').id);
+  assert.equal(own.commands[0].output, "[]\n");
+  assert.throws(() => executor.share(own.id), /aucun agent ne la reçoit/);
+
+  const view = executor.view(servers.get("local"));
+  assert.deepEqual(view.sessions.map((s) => [s.id, s.name, s.shell]), [
+    [null, "Vous", "connected"],
+    [deploy.id, "deploy", "connected"],
+    [logs.id, "logs", "connected"],
+  ]);
+  assert.ok(view.sessions[1].cwd?.endsWith(path.basename(workDir)));
+
+  const broken = requests.create({ serverId: "local", source: "agent", sessionId: deploy.id, explanation: "syntax", commands: ["echo 'unclosed", "echo after"] });
   executor.approve(broken.id, null);
   const brokenDone = await waitFinal(requests, broken.id);
   assert.equal(brokenDone.status, "failed");
   assert.match(brokenDone.commands[0].output, /Erreur de syntaxe/);
   assert.equal(brokenDone.commands[1].status, "skipped");
 
-  const refused = requests.create({ serverId: "local", source: "agent", sessionId: null, explanation: "no", commands: ["rm -rf /tmp/x"] });
+  const refused = requests.create({ serverId: "local", source: "agent", sessionId: deploy.id, explanation: "no", commands: ["rm -rf /tmp/x"] });
   assert.equal(executor.refuse(refused.id, "pas maintenant").status, "refused");
   assert.throws(() => executor.approve(refused.id, null), /plus en attente/);
+
+  const leftOver = requests.create({ serverId: "local", source: "agent", sessionId: deploy.id, explanation: "later", commands: ["uptime"] });
+  executor.closeSession(deploy.id);
+  assert.equal(requests.get(leftOver.id).status, "cancelled");
+  assert.equal(sessions.get(deploy.id).closedBy, "user");
+  assert.deepEqual(executor.views()[0].sessions.map((s) => s.id), [null, logs.id]);
+  assert.throws(() => executor.runManual("local", deploy.id, "ls"), /was closed by the user/);
+
+  sessions.close(logs.id, "agent", requests);
+  assert.deepEqual(executor.views()[0].sessions.map((s) => s.id), [null]);
 });
 
 test("an interactive terminal streams the shell, replays its output and follows resizes", async (t) => {
@@ -195,7 +227,7 @@ test("an interactive terminal streams the shell, replays its output and follows 
   servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
 
   await assert.rejects(terminals.open("local", 80, 24), /Teste la connexion/);
-  const executor = new Executor(servers, new RequestStore(dataDir), () => {});
+  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {});
   await executor.testConnection("local");
   executor.disconnect("local");
 
@@ -237,7 +269,7 @@ test("the key lives in the dedicated file: restricted at test, rotated, then rev
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-keys-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-home-")).replace(/\\/g, "/");
   const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
-  const executor = new Executor(servers, new RequestStore(dataDir), () => {});
+  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {});
   const terminals = new TerminalManager(servers, () => {});
   const keys = new KeyService(servers, executor, terminals, () => {});
 
@@ -286,7 +318,7 @@ test("the key lives in the dedicated file: restricted at test, rotated, then rev
   assert.equal(fs.readFileSync(dedicated, "utf8"), "");
   assert.equal(fs.readFileSync(authorized, "utf8"), ownKeys);
   assert.throws(() => servers.privateKey("local"), /révoquée/);
-  assert.equal(executor.view(servers.get("local")).session, "closed");
+  assert.equal(executor.view(servers.get("local")).sessions[0].shell, "closed");
 
   const reinstalled = keys.installNewKey("local");
   assert.match(reinstalled.publicKey ?? "", /^ssh-ed25519 /);
@@ -318,8 +350,11 @@ test("questions: asked on a statement of a command, kept in line when commands a
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-questions-"));
   const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dir);
-  const executor = new Executor(servers, requests, () => {});
-  const request = requests.create({ serverId: "web", source: "agent", sessionId: "s", explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
+  const sessions = new SessionStore(dir);
+  const executor = new Executor(servers, requests, sessions, () => {});
+  const request = requests.create({ serverId: "web", source: "agent", sessionId: sessions.open("web", "check").id, explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
+  const typed = requests.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["uptime"] });
+  assert.throws(() => executor.askQuestion(typed.id, 0, "uptime"), /aucun agent ne peut l'expliquer/);
 
   executor.askQuestion(request.id, 0, "uptime");
   executor.askQuestion(request.id, 2, "free -m");

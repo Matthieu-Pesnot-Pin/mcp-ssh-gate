@@ -105,7 +105,7 @@ function ClosedEntry({ request }: { request: GateRequest }) {
   )
 }
 
-/** Commande saisie par l'utilisateur : envoi du résultat aux agents, une seule fois. */
+/** Commande saisie par l'utilisateur dans une session d'agent : envoi du résultat à cet agent, une seule fois. */
 function ShareRow({ request, onShared, onError }: { request: GateRequest; onShared: () => void; onError: (message: string) => void }) {
   const [sending, setSending] = useState(false)
 
@@ -144,10 +144,10 @@ interface Props {
   onError: (message: string) => void
 }
 
-/** Historique du serveur : les demandes terminées, les plus anciennes en haut. */
+/** Historique d'une session : ses demandes terminées, les plus anciennes en haut. */
 export function Journal({ requests, onChanged, onError }: Props) {
   if (requests.length === 0) {
-    return <div className="empty-journal">Aucune commande exécutée sur ce serveur pour l'instant.</div>
+    return <div className="empty-journal">Aucune commande exécutée dans cette session.</div>
   }
   const latestId = requests[requests.length - 1].id
 
@@ -173,7 +173,7 @@ export function Journal({ requests, onChanged, onError }: Props) {
                 {request.note && <div>Note pour l'agent : {request.note}</div>}
               </div>
             )}
-            {request.source === 'user' && <ShareRow request={request} onShared={onChanged} onError={onError} />}
+            {request.source === 'user' && request.sessionId !== null && <ShareRow request={request} onShared={onChanged} onError={onError} />}
           </div>
         )
       })}

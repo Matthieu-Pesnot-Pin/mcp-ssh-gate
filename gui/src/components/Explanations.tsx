@@ -59,7 +59,8 @@ interface Props {
 /**
  * Commande affichée en entier, avec ses explications. En mode "auto", chaque instruction
  * a son bouton Expliquer et son explication juste dessous ; en mode "brut", il n'y a pas
- * de bouton et les explications déjà demandées suivent la commande.
+ * de bouton et les explications déjà demandées suivent la commande. Une commande de la
+ * session « Vous » n'a pas de bouton : aucun agent n'y répondrait.
  */
 export function ExplainableCommand({ request, commandIndex, onChanged, onError }: Props) {
   const mode = useContext(LineBreakContext)
@@ -93,6 +94,8 @@ export function ExplainableCommand({ request, commandIndex, onChanged, onError }
       onCancel={() => void run(() => api.cancelQuestion(request.id, question.id))}
     />
   )
+
+  if (request.sessionId === null) return <CommandText command={command} full />
 
   if (mode !== 'auto') {
     const shown = questions.filter((question) => !hidden.has(question.id))

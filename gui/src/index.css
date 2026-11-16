@@ -134,28 +134,117 @@ p {
 .server-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   overflow-y: auto;
   flex: 1;
 }
 
 .server-row {
   display: grid;
-  grid-template-columns: 8px 1fr auto;
+  grid-template-columns: 22px 1fr;
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 8px 12px 8px 14px;
   border-radius: 8px;
-  text-align: left;
 }
 
 .server-row:hover {
   background: var(--surface-raised);
 }
 
-.server-row.selected {
+.server-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding-left: 6px;
+  color: var(--faint);
+}
+
+.server-toggle:hover {
+  color: var(--text);
+}
+
+.server-main {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 12px 8px 6px;
+  text-align: left;
+}
+
+/* Sessions d'un serveur, sous sa ligne : la tienne, puis celles des agents. */
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 21px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-strong);
+}
+
+.session-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.session-row:hover {
+  background: var(--surface-raised);
+}
+
+.session-row.selected {
   background: var(--surface-current);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-icon {
+  color: var(--muted);
+}
+
+.session-icon.agent {
+  color: var(--accent-soft);
+}
+
+.session-count {
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: #2a3150;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge-sm {
+  min-width: 20px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--warning);
+  color: var(--bg);
+  font-size: 10px;
 }
 
 .server-name {
@@ -169,6 +258,150 @@ p {
 .server-row.selected .server-name {
   color: var(--text);
   font-weight: 600;
+}
+
+/* --- Bandeau du serveur et en-tête de la session --------------------------- */
+
+.server-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 24px 0 40px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.server-band-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.server-band-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.server-band-host {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-secondary.active {
+  background: var(--surface-current);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.btn-secondary.active svg {
+  color: var(--accent-soft);
+}
+
+.session-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.session-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 88px;
+  padding: 16px 40px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.chip-sm {
+  height: 22px;
+  padding: 0 9px;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chip.agent {
+  background: var(--surface-current);
+  color: var(--accent-soft);
+}
+
+.session-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--faint);
+  min-width: 0;
+}
+
+.session-meta svg {
+  flex-shrink: 0;
+}
+
+.session-meta .mono {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-meta > span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-close svg {
+  color: var(--danger);
+}
+
+.session-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Volet des notes du serveur, à droite de la session. */
+.notes-panel {
+  width: 420px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--border-strong);
+}
+
+.notes-panel .notes-card {
+  border: none;
+  border-radius: 0;
+  background: none;
+  padding: 20px 24px;
+}
+
+.notes-close {
+  margin-left: 4px;
 }
 
 .server-sub {
@@ -680,46 +913,7 @@ p {
   color: var(--muted);
 }
 
-/* --- Onglets et notes ----------------------------------------------------- */
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 100px;
-  height: 26px;
-  padding: 0 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.tab:hover:not(.active) {
-  color: var(--text-soft);
-}
-
-.tab.active {
-  background: var(--surface-current);
-  color: var(--text);
-  font-weight: 600;
-}
-
-.tab-badge {
-  min-width: 18px;
-  height: 16px;
-  padding: 0 5px;
-  font-size: 10px;
-}
+/* --- Notes ---------------------------------------------------------------- */
 
 .notes-card {
   padding: 22px 24px 20px;

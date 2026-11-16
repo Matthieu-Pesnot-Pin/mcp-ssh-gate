@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CircleX, Info, NotebookPen, Pencil } from 'lucide-react'
+import { CircleX, Info, NotebookPen, Pencil, X } from 'lucide-react'
 import { MAX_NOTES_LENGTH, type ServerView } from '@shared/model'
 import { api } from '../api'
 
@@ -16,10 +16,11 @@ function updatedLine(server: ServerView): string {
 interface Props {
   server: ServerView
   onSaved: () => void
+  onClose: () => void
 }
 
-/** Notes du serveur : lecture, et modification dans une zone de texte libre. */
-export function NotesView({ server, onSaved }: Props) {
+/** Notes du serveur, communes à toutes ses sessions : lecture, et modification dans une zone de texte libre. */
+export function NotesView({ server, onSaved, onClose }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [base, setBase] = useState<string | null>(null)
@@ -60,8 +61,9 @@ export function NotesView({ server, onSaved }: Props) {
     <section className="notes-card">
       <div className="notes-head">
         <NotebookPen size={20} />
-        <div>
-          <div className="card-title">Notes sur le serveur</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="card-title">Notes du serveur</div>
+          <div className="notes-meta">{server.name} · communes à toutes les sessions</div>
           <div className="notes-meta">{updatedLine(server)}</div>
         </div>
         {!editing && (
@@ -70,6 +72,9 @@ export function NotesView({ server, onSaved }: Props) {
             Modifier
           </button>
         )}
+        <button className="icon-btn notes-close" onClick={onClose} title="Fermer les notes" aria-label="Fermer les notes">
+          <X size={18} />
+        </button>
       </div>
       <div className="notes-divider" />
 

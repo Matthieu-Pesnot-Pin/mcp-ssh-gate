@@ -13,8 +13,9 @@ import { assertGuiConfigured, findProjectRoot, loadConfig, type GateConfig } fro
 import { liveGuiUrl } from "./core/heartbeat.js";
 import { RequestStore } from "./core/request-store.js";
 import { ServerStore } from "./core/server-store.js";
+import { SessionStore } from "./core/session-store.js";
 import { generateVaultKey } from "./core/vault.js";
-import { RequestEventScanner, newSessionId, removeOwnHandoffs, runWatchMode } from "./core/watch.js";
+import { RequestEventScanner, removeOwnHandoffs, runWatchMode } from "./core/watch.js";
 import { TOOL_DEFINITIONS, callTool, type ToolContext } from "./tools/tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ if (watchIndex !== -1) {
     process.stderr.write(`[ssh-gate] ${err.message}\n`);
     process.exit(1);
   }
+  process.exit(0);
 }
 
 if (argv.includes("--claude-setup-mcp")) {
@@ -64,6 +66,7 @@ const logger = createLogger("mcp-ssh-gate");
 
 const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
+const sessions = new SessionStore(config.dataDir);
 
 try {
   servers.verifyVault();
@@ -114,8 +117,8 @@ function startGuiWorker() {
 }
 
 /**
- * Un seul worker sert l'interface et exécute les commandes pour toutes les
- * sessions d'agent. Il en démarre un quand aucun n'a donné signe de vie.
+ * Un seul worker sert l'interface et exécute les commandes pour tous les
+ * processus MCP. Il en démarre un quand aucun n'a donné signe de vie.
  */
 function ensureGui() {
   if (guiStatus === "starting") return;
@@ -150,18 +153,25 @@ async function reconnectGui(): Promise<CallToolResult> {
 
 // --- Serveur MCP ---------------------------------------------------------------
 
-const sessionId = newSessionId();
 const entryScript = fileURLToPath(import.meta.url).replace(/\\/g, "/");
+const scanners = new Map<string, RequestEventScanner>();
 const toolContext: ToolContext = {
   servers,
   requests,
+  sessions,
   ensureGui,
   guiUrl,
   reconnectGui,
-  sessionId,
   dataDir: config.dataDir,
-  watchCommand: `node "${entryScript}" --watch ${sessionId}`,
-  events: new RequestEventScanner(requests, sessionId),
+  watchCommand: (sessionId) => `node "${entryScript}" --watch ${sessionId}`,
+  events: (sessionId) => {
+    let scanner = scanners.get(sessionId);
+    if (!scanner) {
+      scanner = new RequestEventScanner(requests, sessions, sessionId);
+      scanners.set(sessionId, scanner);
+    }
+    return scanner;
+  },
 };
 process.on("exit", removeOwnHandoffs);
 

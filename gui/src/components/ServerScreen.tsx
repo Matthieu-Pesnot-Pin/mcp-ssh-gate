@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Ban, CornerDownLeft, Ellipsis, KeyRound, Pencil, RefreshCw, Trash2, Unplug } from 'lucide-react'
-import { isReady, type GateRequest, type ServerView } from '@shared/model'
+import { Ban, Bot, CornerDownLeft, Ellipsis, Folder, KeyRound, NotebookPen, Pencil, Power, RefreshCw, Server, Trash2, Unplug, User } from 'lucide-react'
+import { isReady, type GateRequest, type ServerView, type SessionView } from '@shared/model'
 import { api } from '../api'
+import { ago, plural } from '../format'
 import { usePolling } from '../usePolling'
 import { Journal } from './Journal'
 import { RequestCard, RunCard } from './Cards'
 import { NotesView } from './NotesView'
 
-interface Props {
+interface MenuProps {
   server: ServerView
   onChanged: () => void
   onError: (message: string) => void
@@ -19,7 +20,11 @@ interface Props {
   onDelete: () => void
 }
 
-function ServerMenu({ server, onChanged, onError, onShowKey, onInstallKey, onRotate, onRevoke, onEdit, onDelete }: Props) {
+interface Props extends MenuProps {
+  session: SessionView
+}
+
+function ServerMenu({ server, onChanged, onError, onShowKey, onInstallKey, onRotate, onRevoke, onEdit, onDelete }: MenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -74,10 +79,10 @@ function ServerMenu({ server, onChanged, onError, onShowKey, onInstallKey, onRot
             <Pencil size={16} />
             Modifier
           </button>
-          {server.session === 'connected' && (
+          {server.sessions.some((s) => s.shell === 'connected') && (
             <button onClick={() => pick(() => void disconnect())} disabled={server.busy}>
               <Unplug size={16} />
-              Fermer le shell
+              Fermer les shells
             </button>
           )}
           {server.publicKey && (
@@ -96,7 +101,15 @@ function ServerMenu({ server, onChanged, onError, onShowKey, onInstallKey, onRot
   )
 }
 
-function ManualPrompt({ server, disabledReason, onRun, onError }: { server: ServerView; disabledReason: string | null; onRun: () => void; onError: (m: string) => void }) {
+interface PromptProps {
+  server: ServerView
+  session: SessionView
+  disabledReason: string | null
+  onRun: () => void
+  onError: (m: string) => void
+}
+
+function ManualPrompt({ server, session, disabledReason, onRun, onError }: PromptProps) {
   const [command, setCommand] = useState('')
   const [sending, setSending] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -112,7 +125,7 @@ function ManualPrompt({ server, disabledReason, onRun, onError }: { server: Serv
     setSending(true)
     refocus.current = true
     try {
-      await api.runManual(server.id, text)
+      await api.runManual(server.id, session.id, text)
       setCommand('')
       onRun()
     } catch (err) {
@@ -141,7 +154,7 @@ function ManualPrompt({ server, disabledReason, onRun, onError }: { server: Serv
         onChange={(e) => setCommand(e.target.value)}
         onKeyDown={onKey}
         disabled={!!disabledReason || sending}
-        placeholder={disabledReason ?? 'Taper une commande à exécuter toi-même'}
+        placeholder={disabledReason ?? (session.id === null ? 'Taper une commande à exécuter toi-même' : `Taper une commande à exécuter dans la session ${session.name}`)}
       />
       <button className="icon-btn" title="Exécuter" onClick={() => void submit()} disabled={!!disabledReason || sending || !command.trim()}>
         <CornerDownLeft size={20} />
@@ -150,13 +163,61 @@ function ManualPrompt({ server, disabledReason, onRun, onError }: { server: Serv
   )
 }
 
-/** Session d'un serveur : historique, demande en attente ou exécution en cours, saisie manuelle. */
+/** Fermeture d'une session d'agent ; avec des demandes en attente, une confirmation dit qu'elles seront retirées. */
+function CloseSessionButton({ session, onClosed, onError }: { session: SessionView; onClosed: () => void; onError: (m: string) => void }) {
+  const [confirming, setConfirming] = useState(false)
+  const [closing, setClosing] = useState(false)
+
+  async function close() {
+    setClosing(true)
+    try {
+      await api.closeSession(session.id!)
+      onClosed()
+    } catch (err) {
+      onError((err as Error).message)
+      setClosing(false)
+      setConfirming(false)
+    }
+  }
+
+  if (confirming) {
+    return (
+      <div className="session-confirm">
+        <span>{plural(session.pendingCount, 'demande en attente sera retirée', 'demandes en attente seront retirées')}</span>
+        <button className="btn btn-secondary btn-sm" onClick={() => setConfirming(false)} disabled={closing}>
+          Annuler
+        </button>
+        <button className="btn btn-danger btn-sm" onClick={() => void close()} disabled={closing}>
+          Fermer la session
+        </button>
+      </div>
+    )
+  }
+  return (
+    <button
+      className="btn btn-secondary session-close"
+      onClick={() => (session.pendingCount > 0 ? setConfirming(true) : void close())}
+      disabled={session.busy || closing}
+      title={session.busy ? 'Une commande s’exécute dans cette session' : undefined}
+    >
+      <Power size={16} />
+      Fermer la session
+    </button>
+  )
+}
+
+/**
+ * Écran d'une session : le bandeau du serveur (commun à toutes ses sessions, avec ses
+ * notes), puis la session choisie — son historique, sa demande en attente ou son
+ * exécution en cours, et la saisie manuelle dans son shell.
+ */
 export function ServerScreen(props: Props) {
-  const { server, onChanged, onError, onShowKey, onInstallKey } = props
-  const active = server.busy || server.pendingCount > 0
-  const polled = usePolling(`requests:${server.id}`, () => api.requests(server.id), active ? 1000 : 2500)
+  const { server, session, onChanged, onError, onShowKey, onInstallKey } = props
+  const active = session.busy || session.pendingCount > 0
+  const polled = usePolling(`requests:${server.id}:${session.id ?? ''}`, () => api.requests(server.id, session.id), active ? 1000 : 2500)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const [notesOpen, setNotesOpen] = useState(false)
 
   const requests: GateRequest[] = polled.data?.requests ?? []
   const finished = requests.filter((r) => r.status !== 'pending' && r.status !== 'running')
@@ -168,16 +229,15 @@ export function ServerScreen(props: Props) {
   useLayoutEffect(() => {
     const box = scrollRef.current
     if (box && stickToBottom.current) box.scrollTop = box.scrollHeight
-  }, [lastSignature, server.id])
+  }, [lastSignature, server.id, session.id])
 
   function refresh() {
     polled.reload()
     onChanged()
   }
 
-  const [tab, setTab] = useState<'session' | 'notes'>('session')
-
   const tested = isReady(server)
+  const isAgent = session.id !== null
   const disabledReason = !server.publicKey
     ? 'Clé révoquée : installe une nouvelle clé pour exécuter des commandes'
     : !tested
@@ -188,82 +248,91 @@ export function ServerScreen(props: Props) {
 
   return (
     <main className="main">
-      <header className="topbar">
-        <div style={{ minWidth: 0 }}>
-          <div className="topbar-title">{server.name}</div>
-          <div className="topbar-sub">
-            {server.username}@{server.host}
-            {server.port !== 22 ? `:${server.port}` : ''}
-            {server.cwd ? ` · shell ouvert dans ${server.cwd}` : ''}
-          </div>
-        </div>
+      <header className="server-band">
+        <Server size={16} className="server-band-icon" />
+        <span className="server-band-name">{server.name}</span>
+        <span className="server-band-host">
+          {server.username}@{server.host}
+          {server.port !== 22 ? `:${server.port}` : ''}
+        </span>
         <span className="topbar-spacer" />
-        <div className="tabs" role="tablist">
-          <button role="tab" aria-selected={tab === 'session'} className={`tab${tab === 'session' ? ' active' : ''}`} onClick={() => setTab('session')}>
-            Session
-            {server.pendingCount > 0 && <span className="badge tab-badge">{server.pendingCount}</span>}
-          </button>
-          <button role="tab" aria-selected={tab === 'notes'} className={`tab${tab === 'notes' ? ' active' : ''}`} onClick={() => setTab('notes')}>
-            Notes
-          </button>
-        </div>
-        {server.session === 'connected' ? (
-          <span className="chip ok">
-            <span className="dot on" />
-            Connecté
-          </span>
-        ) : (
-          <span className="chip">
-            <span className="dot" />
-            {!server.publicKey ? 'Clé révoquée' : tested ? 'Shell fermé' : 'Non testé'}
-          </span>
-        )}
+        <button className={`btn btn-secondary btn-sm${notesOpen ? ' active' : ''}`} onClick={() => setNotesOpen(!notesOpen)} aria-pressed={notesOpen}>
+          <NotebookPen size={14} />
+          Notes du serveur
+        </button>
         <ServerMenu {...props} />
       </header>
 
-      {tab === 'notes' && (
-        <div className="content">
-          <NotesView server={server} onSaved={onChanged} />
-        </div>
-      )}
-
-      <div
-        className="content"
-        style={tab === 'session' ? undefined : { display: 'none' }}
-        ref={scrollRef}
-        onScroll={(e) => {
-          const box = e.currentTarget
-          stickToBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40
-        }}
-      >
-        {!server.publicKey ? (
-          <div className="banner">
-            <KeyRound size={18} />
-            <span>La clé de ce serveur a été révoquée : SSH Gate n'y a plus accès.</span>
-            <button className="btn btn-secondary" onClick={onInstallKey}>
-              Installer une clé
-            </button>
-          </div>
-        ) : (
-          !tested && (
-            <div className="banner">
-              <KeyRound size={18} />
-              <span>La connexion à ce serveur n'a jamais été testée. Colle la commande d'installation sur le serveur, puis teste la connexion.</span>
-              <button className="btn btn-secondary" onClick={onShowKey}>
-                Installation et test
-              </button>
+      <div className="session-area">
+        <div className="session-column">
+          <div className="session-head">
+            <div style={{ minWidth: 0 }}>
+              <div className="session-title">
+                {session.name}
+                <span className={`chip chip-sm${isAgent ? ' agent' : ''}`}>
+                  {isAgent ? <Bot size={12} /> : <User size={12} />}
+                  {isAgent ? 'Agent' : 'Ta session'}
+                </span>
+              </div>
+              <div className="session-meta">
+                <Folder size={13} />
+                <span className="mono">{session.cwd ?? 'shell fermé'}</span>
+                <span className="session-meta-sep">·</span>
+                <span>
+                  {isAgent
+                    ? `Ouverte par un agent ${ago(session.openedAt!)} · dossier et variables propres à cette session`
+                    : 'Tes commandes manuelles ; aucun agent ne les reçoit'}
+                </span>
+              </div>
             </div>
-          )
-        )}
-        {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
-        {polled.data && <Journal requests={finished} onChanged={refresh} onError={onError} />}
-        {running && <RunCard request={running} onError={onError} />}
-        {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={server.busy || !!running} onDone={refresh} onError={onError} />}
-      </div>
+            <span className="topbar-spacer" />
+            {isAgent && <CloseSessionButton key={session.id} session={session} onClosed={onChanged} onError={onError} />}
+          </div>
 
-      <footer className="footer" style={tab === 'session' ? undefined : { display: 'none' }}>
-        <ManualPrompt server={server} disabledReason={disabledReason} onRun={refresh} onError={onError} />
-      </footer>
+          <div
+            className="content"
+            ref={scrollRef}
+            onScroll={(e) => {
+              const box = e.currentTarget
+              stickToBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40
+            }}
+          >
+            {!server.publicKey ? (
+              <div className="banner">
+                <KeyRound size={18} />
+                <span>La clé de ce serveur a été révoquée : SSH Gate n'y a plus accès.</span>
+                <button className="btn btn-secondary" onClick={onInstallKey}>
+                  Installer une clé
+                </button>
+              </div>
+            ) : (
+              !tested && (
+                <div className="banner">
+                  <KeyRound size={18} />
+                  <span>La connexion à ce serveur n'a jamais été testée. Colle la commande d'installation sur le serveur, puis teste la connexion.</span>
+                  <button className="btn btn-secondary" onClick={onShowKey}>
+                    Installation et test
+                  </button>
+                </div>
+              )
+            )}
+            {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
+            {polled.data && <Journal requests={finished} onChanged={refresh} onError={onError} />}
+            {running && <RunCard request={running} onError={onError} />}
+            {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={session.busy || !!running} onDone={refresh} onError={onError} />}
+          </div>
+
+          <footer className="footer">
+            <ManualPrompt server={server} session={session} disabledReason={disabledReason} onRun={refresh} onError={onError} />
+          </footer>
+        </div>
+
+        {notesOpen && (
+          <aside className="notes-panel">
+            <NotesView server={server} onSaved={onChanged} onClose={() => setNotesOpen(false)} />
+          </aside>
+        )}
+      </div>
     </main>
   )
 }
