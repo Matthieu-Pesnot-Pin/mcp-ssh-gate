@@ -18,10 +18,10 @@ export interface ToolContext {
   guiUrl: () => string | null;
   reconnectGui: () => Promise<CallToolResult>;
   dataDir: string;
-  /** Commande que l'outil Monitor de l'hôte lance pour surveiller une session. */
-  watchCommand: (sessionId: string) => string;
-  /** Événements d'une session, lus par l'outil d'attente du veilleur du gateway. */
-  events: (sessionId: string) => RequestEventScanner;
+  /** Commande que l'outil Monitor de l'hôte lance pour surveiller les sessions d'un agent. */
+  watchCommand: (agentId: string) => string;
+  /** Événements des sessions d'un agent, lus par l'outil d'attente du veilleur du gateway. */
+  events: (agentId: string) => RequestEventScanner;
 }
 
 export const WATCH_ARG = "_gateway_watch";
@@ -35,19 +35,22 @@ const HISTORY_OUTPUT_PER_COMMAND = 2_000;
 const POLL_MS = 1000;
 
 const SESSION_ID_PROPERTY = { type: "string", description: "Id of your session, as returned by open_session." };
+const AGENT_ID_PROPERTY = { type: "string", description: "Your agent id, returned by your first open_session." };
 
 export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "open_session",
     description:
-      "Open your own session on a server before submitting commands: it gets its own persistent bash shell (cd and export only carry over inside the session), and you are only notified of what happens in it. " +
-      "Returns a session_id to pass to submit_commands and enable_notifications. Open one session per server you work on and keep it for the whole task; " +
-      "the user sees it in the GUI under the name you give. Close it with close_session when the task is done.",
+      "Open your own session on a server before submitting commands: it gets its own persistent bash shell (cd and export only carry over inside the session), and only you are notified of what happens in it. " +
+      "Returns a session_id to pass to submit_commands. Open one session per server you work on and keep it for the whole task; the user sees it in the GUI under the name you give. " +
+      "Your sessions are tied to your agent id, so a single notification watcher covers all of them: on your first open_session, omit agent_id — a new agent id is created and returned, then call enable_notifications with it once. " +
+      "Pass that same agent_id to every later open_session of this conversation: its events reach the watcher you already armed. Close a session with close_session when its task is done.",
     inputSchema: {
       type: "object",
       properties: {
         server: { type: "string", description: "Server id or name, as returned by list_servers." },
         name: { type: "string", maxLength: MAX_SESSION_NAME_LENGTH, description: `Short label of what you are doing, shown to the user (at most ${MAX_SESSION_NAME_LENGTH} characters), e.g. "deploy shop".` },
+        agent_id: { type: "string", description: "Your agent id, returned by your first open_session. Omit it only on the first open_session of this conversation." },
       },
       required: ["server", "name"],
     },
@@ -55,7 +58,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "close_session",
     description:
-      "Close a session you opened when your task is done: its shell is closed and its pending requests are withdrawn. A session with a running request cannot be closed. The session_id can no longer be used afterwards.",
+      "Close a session you opened when its task is done: its shell is closed and its pending requests are withdrawn. A session with a running request cannot be closed. The session_id can no longer be used afterwards; your watcher keeps covering your other sessions.",
     inputSchema: {
       type: "object",
       properties: { session_id: SESSION_ID_PROPERTY },
@@ -65,19 +68,19 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "enable_notifications",
     description:
-      "Get notified of what happens in your session: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in your session, the user asks you to explain a command, or the user closes your session. " +
+      "Get notified of what happens in all your sessions, including the ones you open later with the same agent_id: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in one of your sessions, the user asks you to explain a command, or the user closes one of your sessions. " +
       "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
-      "Call it once right after open_session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+      "Call it once per conversation, right after your first open_session — never once per session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {
       type: "object",
       properties: {
-        session_id: SESSION_ID_PROPERTY,
+        agent_id: AGENT_ID_PROPERTY,
         [WATCH_ARG]: {
           type: "object",
           description: "Filled in by the mcp-http-gateway relay, never by the agent: the relay will run the watcher and needs a watch specification instead of a local command",
         },
       },
-      required: ["session_id"],
+      required: ["agent_id"],
     },
   },
   {
@@ -85,11 +88,11 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       "Reserved for the notification watcher that the mcp-http-gateway relay runs on the agent's machine: do not call it yourself. " +
       "To be notified, call enable_notifications; to read the outcome of a request, call get_result. " +
-      "Blocks until an event of the session happens after the cursor (a request finished, a command shared by the user, a question from the user, the session closed by the user), or until the timeout, and returns one line per event with the next cursor.",
+      "Blocks until an event of one of the agent's sessions happens after the cursor (a request finished, a command shared by the user, a question from the user, a session closed by the user), or until the timeout, and returns one line per event with the next cursor.",
     inputSchema: {
       type: "object",
       properties: {
-        session_id: SESSION_ID_PROPERTY,
+        agent_id: AGENT_ID_PROPERTY,
         cursor: { type: "string", pattern: "^[0-9]+$", description: "Cursor returned by the previous call. Omit to wait for requests finished from now on." },
         timeout_seconds: {
           type: "integer",
@@ -98,7 +101,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
           description: `Maximum wait in seconds (default ${DEFAULT_NOTIFICATION_WAIT_SECONDS}).`,
         },
       },
-      required: ["session_id"],
+      required: ["agent_id"],
     },
   },
   {
@@ -207,7 +210,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
-const OpenSessionArgs = z.object({ server: z.string().min(1), name: z.string() });
+const OpenSessionArgs = z.object({ server: z.string().min(1), name: z.string(), agent_id: z.string().min(1).optional() });
 const SessionArgs = z.object({ session_id: z.string().min(1) });
 const SubmitArgs = z.object({
   session_id: z.string().min(1),
@@ -225,9 +228,9 @@ const NotesArgs = z.object({
   notes: z.string(),
   mode: z.enum(["append", "replace"]).optional(),
 });
-const EnableArgs = z.object({ session_id: z.string().min(1), [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
+const EnableArgs = z.object({ agent_id: z.string().min(1), [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
 const NotificationWaitArgs = z.object({
-  session_id: z.string().min(1),
+  agent_id: z.string().min(1),
   cursor: z.string().regex(/^[0-9]+$/).optional(),
   timeout_seconds: z.number().int().min(1).max(MAX_NOTIFICATION_WAIT_SECONDS).optional(),
 });
@@ -291,16 +294,24 @@ function assertUsable(server: StoredServer): void {
 }
 
 function openSession(ctx: ToolContext, args: unknown): CallToolResult {
-  const { server: serverRef, name } = parse(OpenSessionArgs, args);
+  const { server: serverRef, name, agent_id } = parse(OpenSessionArgs, args);
   const server = ctx.servers.get(serverRef);
   assertUsable(server);
-  const session = ctx.sessions.open(server.id, name);
+  const agent = agent_id === undefined ? ctx.sessions.createAgent() : ctx.sessions.getAgent(agent_id);
+  const session = ctx.sessions.open(server.id, name, agent.id);
   ctx.ensureGui();
+  const watch =
+    agent_id === undefined
+      ? [
+          `Your agent id is ${agent.id}. Call enable_notifications now with agent_id ${agent.id}: that single watcher covers all your sessions.`,
+          `Pass agent_id ${agent.id} to every later open_session of this conversation, so their events reach the same watcher; omitting it creates another agent id that no watcher of yours follows.`,
+        ]
+      : [`It is tied to your agent id ${agent.id}: the watcher you armed with enable_notifications already covers it, do not arm another one.`];
   return text(
     [
-      `Session ${session.id} opened on ${server.id} as "${session.name}".`,
-      `Pass session_id ${session.id} to submit_commands and to enable_notifications. Call enable_notifications now if you have not armed a watcher for this session.`,
-      "Its shell is your own: cd and export carry over between your requests and never leak to other sessions. Close it with close_session when your task is done.",
+      `Session ${session.id} opened on ${server.id} as "${session.name}". Pass session_id ${session.id} to submit_commands.`,
+      ...watch,
+      "Its shell is your own: cd and export carry over between your requests and never leak to other sessions. Close it with close_session when its task is done.",
     ].join("\n")
   );
 }
@@ -308,7 +319,7 @@ function openSession(ctx: ToolContext, args: unknown): CallToolResult {
 function closeSession(ctx: ToolContext, args: unknown): CallToolResult {
   const { session_id } = parse(SessionArgs, args);
   const session = ctx.sessions.close(session_id, "agent", ctx.requests);
-  return text(`Session ${session.id} closed. Its watcher stops by itself.`);
+  return text(`Session ${session.id} closed. Your watcher keeps running for your other sessions.`);
 }
 
 function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
@@ -331,7 +342,7 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
   const url = ctx.guiUrl();
   const next =
     `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
-    `If you have not called enable_notifications in this session, do it now.`;
+    `If you have not called enable_notifications with your agent_id ${session.agentId} in this conversation, do it now.`;
   return text(
     `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
   );
@@ -344,15 +355,15 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
  */
 function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   const input = parse(EnableArgs, args);
-  const session = ctx.sessions.getOpen(input.session_id);
-  const description = `ssh-gate session ${session.id}`;
+  const agent = ctx.sessions.getAgent(input.agent_id);
+  const description = `ssh-gate agent ${agent.id}`;
   if (input[WATCH_ARG]) {
     return {
       content: [{ type: "text", text: "Watch specification for the mcp-http-gateway relay." }],
       _meta: {
         [WATCH_META]: {
           tool: "wait_for_notifications",
-          arguments: { session_id: session.id },
+          arguments: { agent_id: agent.id },
           cursor: String(Date.now()),
           description,
         },
@@ -360,13 +371,13 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
     };
   }
 
-  writeHandoff(session.id, ctx.dataDir);
-  const command = ctx.watchCommand(session.id);
-  const since = liveWatcherSince(ctx.dataDir, session.id);
+  writeHandoff(agent.id, ctx.dataDir);
+  const command = ctx.watchCommand(agent.id);
+  const since = liveWatcherSince(ctx.dataDir, agent.id);
   if (since) {
     return text(
       [
-        `Notifications are already live for session ${session.id} (watcher armed since ${since}).`,
+        `Notifications are already live for agent ${agent.id} (watcher armed since ${since}): it covers all your sessions, including new ones.`,
         "Nothing to do: do not arm a second watcher, you would get every notification twice.",
         "Only if the host just told you your watcher expired or stopped, re-arm it with the same Monitor call:",
         `command \`${command}\`, timeout_ms ${MONITOR_TIMEOUT_MS}.`,
@@ -375,22 +386,23 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   }
   return text(
     [
-      `Notifications enabled for session ${session.id}.`,
+      `Notifications enabled for agent ${agent.id}.`,
       "",
       "Last step — call the Monitor tool now, with exactly these arguments:",
       `  command:     ${command}`,
       `  description: ${description}`,
       `  timeout_ms:  ${MONITOR_TIMEOUT_MS}`,
       "",
-      "Until that watcher is armed, nothing will reach you. Once it is, keep working: each request of this session",
-      "announces itself when its commands have all run, or when the user refused or interrupted it — one line per",
-      "request. Read the outcome with get_result.",
+      "Until that watcher is armed, nothing will reach you. Once it is, keep working: it covers every session tied to",
+      `agent ${agent.id}, including the ones you open later with that agent_id — never arm one watcher per session.`,
+      "Each line names the server and the session. A request announces itself when its commands have all run, or when",
+      "the user refused or interrupted it; read the outcome with get_result.",
       "When the user asks you to explain a command from the GUI, a line gives the statement, the request_id and the",
-      "question_id: answer it with answer_question. If the user closes the session, a line says so and the watcher stops.",
+      "question_id: answer it with answer_question. If the user closes one of your sessions, a line says so.",
       "",
       "The host stops every monitor after 30 minutes at most. Each time it tells you this watcher expired, call",
-      "Monitor again right away with the same arguments — do not call enable_notifications again. A request that",
-      "finished while no watcher was running is announced as soon as the watcher is back.",
+      "Monitor again right away with the same arguments — do not call enable_notifications again. An event that",
+      "happened while no watcher was running is announced as soon as the watcher is back.",
     ].join("\n")
   );
 }
@@ -408,8 +420,8 @@ function getResult(ctx: ToolContext, args: unknown): CallToolResult {
 
 /** Outil d'attente du veilleur du gateway : une ligne par événement après le curseur. */
 async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
-  const { session_id, cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
-  const scanner = ctx.events(ctx.sessions.get(session_id).id);
+  const { agent_id, cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
+  const scanner = ctx.events(ctx.sessions.getAgent(agent_id).id);
   let cursor = rawCursor === undefined ? Date.now() : Number(rawCursor);
   const deadline = Date.now() + (timeout_seconds ?? DEFAULT_NOTIFICATION_WAIT_SECONDS) * 1000;
 

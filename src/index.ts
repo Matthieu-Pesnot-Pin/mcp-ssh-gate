@@ -28,9 +28,9 @@ if (argv.includes("--generate-vault-key")) {
 
 const watchIndex = argv.indexOf("--watch");
 if (watchIndex !== -1) {
-  const session = argv[watchIndex + 1];
+  const agent = argv[watchIndex + 1];
   try {
-    await runWatchMode(session && !session.startsWith("-") ? session : null);
+    await runWatchMode(agent && !agent.startsWith("-") ? agent : null);
   } catch (err: any) {
     process.stderr.write(`[ssh-gate] ${err.message}\n`);
     process.exit(1);
@@ -163,12 +163,12 @@ const toolContext: ToolContext = {
   guiUrl,
   reconnectGui,
   dataDir: config.dataDir,
-  watchCommand: (sessionId) => `node "${entryScript}" --watch ${sessionId}`,
-  events: (sessionId) => {
-    let scanner = scanners.get(sessionId);
+  watchCommand: (agentId) => `node "${entryScript}" --watch ${agentId}`,
+  events: (agentId) => {
+    let scanner = scanners.get(agentId);
     if (!scanner) {
-      scanner = new RequestEventScanner(requests, sessions, sessionId);
-      scanners.set(sessionId, scanner);
+      scanner = new RequestEventScanner(requests, sessions, agentId);
+      scanners.set(agentId, scanner);
     }
     return scanner;
   },

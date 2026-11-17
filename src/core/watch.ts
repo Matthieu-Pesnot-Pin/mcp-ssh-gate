@@ -24,6 +24,7 @@ export interface FinishedRequest {
   kind: "finished";
   id: string;
   serverId: string;
+  sessionId: string;
   source: RequestSource;
   status: RequestStatus;
   /** Instant à annoncer : fin de la demande de l'agent, ou envoi par l'utilisateur. */
@@ -39,6 +40,7 @@ export interface QuestionAsked {
   /** Demande qui contient la commande. */
   id: string;
   serverId: string;
+  sessionId: string;
   questionId: string;
   commandIndex: number;
   commandCount: number;
@@ -61,16 +63,18 @@ export type GateEvent = FinishedRequest | QuestionAsked | SessionClosed;
 
 interface CachedEntry {
   mtimeMs: number;
-  /** Événements de la demande destinés à la session. */
+  /** Session de la demande ; null pour la session « Vous ». */
+  sessionId: string | null;
   events: GateEvent[];
 }
 
 /**
- * Lit les événements à annoncer à une session d'agent : ses demandes une fois
- * terminées, les commandes que l'utilisateur y a tapées puis envoyées à l'agent, les
- * questions de l'utilisateur sur ses commandes, et sa fermeture par l'utilisateur. Le
- * curseur est l'instant, en millisecondes, du dernier événement déjà annoncé. Seuls les
- * fichiers de demande modifiés depuis la lecture précédente sont relus.
+ * Lit les événements à annoncer à un agent, pour toutes les sessions qu'il a ouvertes :
+ * ses demandes une fois terminées, les commandes que l'utilisateur a tapées dans l'une
+ * de ses sessions puis lui a envoyées, les questions de l'utilisateur sur ses commandes,
+ * et la fermeture d'une de ses sessions par l'utilisateur. Le curseur est l'instant, en
+ * millisecondes, du dernier événement déjà annoncé. Seuls les fichiers de demande
+ * modifiés depuis la lecture précédente sont relus.
  */
 export class RequestEventScanner {
   private readonly cache = new Map<string, CachedEntry>();
@@ -78,44 +82,41 @@ export class RequestEventScanner {
   constructor(
     private readonly requests: RequestStore,
     private readonly sessions: SessionStore,
-    private readonly session: string
+    private readonly agent: string
   ) {}
 
   /** Événements à annoncer après `cursor`, dans l'ordre chronologique. */
   since(cursor: number): GateEvent[] {
     const found: GateEvent[] = [];
-    const closed = this.closedEvent();
-    if (closed && closed.eventMs > cursor) found.push(closed);
+    const owned = this.sessions.listForAgent(this.agent);
+    const ids = new Set(owned.map((session) => session.id));
+    for (const session of owned) {
+      if (!session.closedAt || session.closedBy !== "user") continue;
+      const closed: SessionClosed = { kind: "closed", sessionId: session.id, serverId: session.serverId, name: session.name, eventMs: Date.parse(session.closedAt) };
+      if (closed.eventMs > cursor) found.push(closed);
+    }
     for (const { file, mtimeMs } of this.requests.files()) {
       let entry = this.cache.get(file);
       if (!entry || entry.mtimeMs !== mtimeMs) {
         try {
-          entry = { mtimeMs, events: this.toEvents(readRequestFile(file)) };
+          const request = readRequestFile(file);
+          entry = { mtimeMs, sessionId: request.sessionId, events: this.toEvents(request) };
         } catch {
           continue;
         }
         this.cache.set(file, entry);
       }
+      if (entry.sessionId === null || !ids.has(entry.sessionId)) continue;
       for (const event of entry.events) if (event.eventMs > cursor) found.push(event);
     }
     return found.sort((a, b) => a.eventMs - b.eventMs);
   }
 
-  /** Vrai quand la session est fermée, par l'agent ou par l'utilisateur. */
-  isClosed(): boolean {
-    return this.sessions.get(this.session).closedAt !== null;
-  }
-
-  private closedEvent(): SessionClosed | null {
-    const session = this.sessions.get(this.session);
-    if (!session.closedAt || session.closedBy !== "user") return null;
-    return { kind: "closed", sessionId: session.id, serverId: session.serverId, name: session.name, eventMs: Date.parse(session.closedAt) };
-  }
-
   private toEvents(request: GateRequest): GateEvent[] {
-    if (request.sessionId !== this.session) return [];
+    if (request.sessionId === null) return [];
+    const sessionId = request.sessionId;
     const events: GateEvent[] = [];
-    const finished = this.toFinished(request);
+    const finished = this.toFinished(request, sessionId);
     if (finished) events.push(finished);
     for (const question of request.questions) {
       if (question.answer !== null) continue;
@@ -123,6 +124,7 @@ export class RequestEventScanner {
         kind: "question",
         id: request.id,
         serverId: request.serverId,
+        sessionId,
         questionId: question.id,
         commandIndex: question.commandIndex,
         commandCount: request.commands.length,
@@ -133,7 +135,7 @@ export class RequestEventScanner {
     return events;
   }
 
-  private toFinished(request: GateRequest): FinishedRequest | null {
+  private toFinished(request: GateRequest, sessionId: string): FinishedRequest | null {
     if (!isFinalStatus(request.status) || request.status === "cancelled" || !request.finishedAt) return null;
     const eventAt = request.source === "agent" ? request.finishedAt : request.sharedAt;
     if (!eventAt) return null;
@@ -141,6 +143,7 @@ export class RequestEventScanner {
       kind: "finished",
       id: request.id,
       serverId: request.serverId,
+      sessionId,
       source: request.source,
       status: request.status,
       eventMs: Date.parse(eventAt),
@@ -173,16 +176,21 @@ export function formatEvent(event: GateEvent): string {
   }
 }
 
+/** Début commun des lignes : le serveur et la session concernés. */
+function origin(event: GateEvent): string {
+  return `[ssh-gate] ${event.serverId} · session ${event.sessionId}`;
+}
+
 function formatClosed(event: SessionClosed): string {
   return (
-    `[ssh-gate] ${event.serverId} — the user closed your session ${event.sessionId} ("${oneLine(event.name, 60)}"): its shell is gone and its pending requests were withdrawn. ` +
-    `Open a new session with open_session if you still need to run commands.`
+    `${origin(event)} — the user closed your session "${oneLine(event.name, 60)}": its shell is gone and its pending requests were withdrawn. ` +
+    `Open a new session with open_session, passing your agent_id, if you still need to run commands on ${event.serverId}.`
   );
 }
 
 function formatQuestion(event: QuestionAsked): string {
   return (
-    `[ssh-gate] ${event.serverId} — the user asks you to explain part of command ${event.commandIndex + 1}/${event.commandCount} of request ${event.id}: ` +
+    `${origin(event)} — the user asks you to explain part of command ${event.commandIndex + 1}/${event.commandCount} of request ${event.id}: ` +
     `${oneLine(event.statement, 1000)} — answer with answer_question, request_id ${event.id}, question_id ${event.questionId}`
   );
 }
@@ -214,8 +222,8 @@ function formatFinished(request: FinishedRequest): string {
   }
   const note = request.note && request.status !== "refused" ? " — the user left a note" : "";
   const subject =
-    request.source === "user" ? `the user shared ${total} command(s) they ran themselves in your session (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
-  return `[ssh-gate] ${request.serverId} — ${subject}${note} — read it with get_result, request_id ${request.id}`;
+    request.source === "user" ? `the user shared ${total} command(s) they ran themselves in this session (request ${request.id}), ${outcome}` : `request ${request.id} ${outcome}`;
+  return `${origin(request)} — ${subject}${note} — read it with get_result, request_id ${request.id}`;
 }
 
 // --- Veilleur local ----------------------------------------------------------------
@@ -226,7 +234,7 @@ function formatFinished(request: FinishedRequest): string {
 // s'est arrêté. Il ne contient aucun secret.
 
 interface Handoff {
-  session: string;
+  agent: string;
   dataDir: string;
   cursor: number;
   written_at: string;
@@ -236,36 +244,36 @@ function handoffDir(): string {
   return path.join(os.homedir(), ".mcp-ssh-gate", "watch");
 }
 
-function handoffPath(session: string): string {
-  return path.join(handoffDir(), `${createHash("sha256").update(session).digest("hex").slice(0, 32)}.json`);
+function handoffPath(agent: string): string {
+  return path.join(handoffDir(), `${createHash("sha256").update(agent).digest("hex").slice(0, 32)}.json`);
 }
 
 const written = new Set<string>();
 
-function readHandoff(session: string): Handoff | null {
+function readHandoff(agent: string): Handoff | null {
   try {
-    const handoff = readJson<Handoff>(handoffPath(session));
-    return handoff.session === session ? handoff : null;
+    const handoff = readJson<Handoff>(handoffPath(agent));
+    return handoff.agent === agent ? handoff : null;
   } catch {
     return null;
   }
 }
 
 function saveHandoff(handoff: Omit<Handoff, "written_at">): void {
-  writeJsonAtomic(handoffPath(handoff.session), { ...handoff, written_at: new Date().toISOString() } satisfies Handoff);
+  writeJsonAtomic(handoffPath(handoff.agent), { ...handoff, written_at: new Date().toISOString() } satisfies Handoff);
 }
 
-/** Dépose le relais de la session ; un relais existant garde son curseur. */
-export function writeHandoff(session: string, dataDir: string): void {
-  written.add(session);
-  const existing = readHandoff(session);
-  saveHandoff({ session, dataDir, cursor: existing?.cursor ?? Date.now() });
+/** Dépose le relais de l'agent ; un relais existant garde son curseur. */
+export function writeHandoff(agent: string, dataDir: string): void {
+  written.add(agent);
+  const existing = readHandoff(agent);
+  saveHandoff({ agent, dataDir, cursor: existing?.cursor ?? Date.now() });
   pruneStaleHandoffs();
 }
 
 /** Retire les relais écrits par ce processus. Synchrone : appelable sur `exit`. */
 export function removeOwnHandoffs(): void {
-  for (const session of written) fs.rmSync(handoffPath(session), { force: true });
+  for (const agent of written) fs.rmSync(handoffPath(agent), { force: true });
   written.clear();
 }
 
@@ -286,14 +294,14 @@ function pruneStaleHandoffs(): void {
   }
 }
 
-function watcherBeatPath(dataDir: string, session: string): string {
-  return path.join(dataDir, "watchers", `${session}.json`);
+function watcherBeatPath(dataDir: string, agent: string): string {
+  return path.join(dataDir, "watchers", `${agent}.json`);
 }
 
-/** Date depuis laquelle un veilleur local vivant surveille cette session, ou null. */
-export function liveWatcherSince(dataDir: string, session: string): string | null {
+/** Date depuis laquelle un veilleur local vivant surveille cet agent, ou null. */
+export function liveWatcherSince(dataDir: string, agent: string): string | null {
   try {
-    const beat = readJson<{ since: string; updatedAt: number }>(watcherBeatPath(dataDir, session));
+    const beat = readJson<{ since: string; updatedAt: number }>(watcherBeatPath(dataDir, agent));
     return Date.now() - beat.updatedAt < WATCHER_STALE_MS ? beat.since : null;
   } catch {
     return null;
@@ -301,41 +309,36 @@ export function liveWatcherSince(dataDir: string, session: string): string | nul
 }
 
 /**
- * Mode veilleur local (`--watch <session>`). Une ligne sur stdout par événement
- * de la session : l'outil Monitor de l'hôte réveille l'agent à chaque ligne. Le journal
- * et les erreurs partent sur stderr. Une erreur de lecture se traduit par un réessai ;
- * le veilleur s'arrête une fois la session fermée et sa fermeture annoncée.
+ * Mode veilleur local (`--watch <agent>`). Une ligne sur stdout par événement d'une
+ * des sessions de l'agent, y compris celles ouvertes après le lancement du veilleur :
+ * l'outil Monitor de l'hôte réveille l'agent à chaque ligne. Le journal et les erreurs
+ * partent sur stderr. Une erreur de lecture se traduit par un réessai.
  */
-export async function runWatchMode(session: string | null): Promise<void> {
-  if (!session) throw new GateError("--watch needs a session id: `mcp-ssh-gate --watch <session>`. Call enable_notifications to get the exact command.");
-  const handoff = readHandoff(session);
+export async function runWatchMode(agent: string | null): Promise<void> {
+  if (!agent) throw new GateError("--watch needs an agent id: `mcp-ssh-gate --watch <agent_id>`. Call enable_notifications to get the exact command.");
+  const handoff = readHandoff(agent);
   if (!handoff) {
-    throw new GateError(`No notification handoff for session ${session}: call enable_notifications in that MCP session first.`);
+    throw new GateError(`No notification handoff for agent ${agent}: call enable_notifications in that MCP session first.`);
   }
 
-  const scanner = new RequestEventScanner(new RequestStore(handoff.dataDir), new SessionStore(handoff.dataDir), session);
+  const scanner = new RequestEventScanner(new RequestStore(handoff.dataDir), new SessionStore(handoff.dataDir), agent);
   const since = new Date().toISOString();
   let cursor = handoff.cursor;
   let lastBeat = 0;
   let backoff = SCAN_INTERVAL_MS;
-  process.stderr.write(`[ssh-gate] watching session ${session} in ${handoff.dataDir}\n`);
+  process.stderr.write(`[ssh-gate] watching the sessions of agent ${agent} in ${handoff.dataDir}\n`);
 
   for (;;) {
     try {
       if (Date.now() - lastBeat >= WATCHER_BEAT_MS) {
-        writeJsonAtomic(watcherBeatPath(handoff.dataDir, session), { since, updatedAt: Date.now() });
+        writeJsonAtomic(watcherBeatPath(handoff.dataDir, agent), { since, updatedAt: Date.now() });
         lastBeat = Date.now();
       }
-      const closed = scanner.isClosed();
       const events = scanner.since(cursor);
       if (events.length > 0) {
         for (const event of events) process.stdout.write(`${formatEvent(event)}\n`);
         cursor = advanceCursor(cursor, events);
-        saveHandoff({ session, dataDir: handoff.dataDir, cursor });
-      }
-      if (closed) {
-        process.stderr.write(`[ssh-gate] session ${session} is closed: the watcher stops\n`);
-        return;
+        saveHandoff({ agent, dataDir: handoff.dataDir, cursor });
       }
       backoff = SCAN_INTERVAL_MS;
       await sleep(SCAN_INTERVAL_MS);

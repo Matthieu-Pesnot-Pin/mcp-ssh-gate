@@ -146,7 +146,7 @@ test("approved commands run in the persistent shell of their session and stop at
   assert.match(tested.fingerprint, /^SHA256:/);
   assert.equal(servers.get("local").hostKeyFingerprint, tested.fingerprint);
 
-  const deploy = sessions.open("local", "deploy");
+  const deploy = sessions.open("local", "deploy", sessions.createAgent().id);
   const workPath = workDir.replace(/\\/g, "/");
   const batch = requests.create({
     serverId: "local",
@@ -176,7 +176,7 @@ test("approved commands run in the persistent shell of their session and stop at
   assert.equal(manualDone.sessionId, deploy.id);
   assert.equal(manualDone.commands[0].output, "hello again\n");
 
-  const logs = sessions.open("local", "logs");
+  const logs = sessions.open("local", "logs", sessions.createAgent().id);
   const isolated = requests.create({ serverId: "local", source: "agent", sessionId: logs.id, explanation: "env", commands: ['echo "[$GREETING]"; basename "$PWD"'] });
   executor.approve(isolated.id, null);
   const isolatedDone = await waitFinal(requests, isolated.id);
@@ -352,7 +352,7 @@ test("questions: asked on a statement of a command, kept in line when commands a
   const requests = new RequestStore(dir);
   const sessions = new SessionStore(dir);
   const executor = new Executor(servers, requests, sessions, () => {});
-  const request = requests.create({ serverId: "web", source: "agent", sessionId: sessions.open("web", "check").id, explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
+  const request = requests.create({ serverId: "web", source: "agent", sessionId: sessions.open("web", "check", sessions.createAgent().id).id, explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
   const typed = requests.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["uptime"] });
   assert.throws(() => executor.askQuestion(typed.id, 0, "uptime"), /aucun agent ne peut l'expliquer/);
 

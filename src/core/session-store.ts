@@ -1,33 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import { MAX_SESSION_NAME_LENGTH, type AgentSession, type SessionCloser } from "../../shared/model.js";
+import { MAX_SESSION_NAME_LENGTH, type AgentIdentity, type AgentSession, type SessionCloser } from "../../shared/model.js";
 import { GateError } from "./errors.js";
 import { readJson, withFileLock, writeJsonAtomic } from "./files.js";
 import type { RequestStore } from "./request-store.js";
 
 const ID_PATTERN = /^sh_[0-9a-f]{8}$/;
+const AGENT_ID_PATTERN = /^ag_[0-9a-f]{8}$/;
 
 /**
- * Sessions d'agent : un fichier JSON par session dans `<DATA_DIR>/sessions/`.
- * Les processus MCP les ouvrent et les ferment, le worker de l'interface leur
- * associe un shell.
+ * Sessions d'agent : un fichier JSON par session dans `<DATA_DIR>/sessions/`, et un par
+ * identité d'agent dans `<DATA_DIR>/agents/`. Les processus MCP les ouvrent et les
+ * ferment, le worker de l'interface associe un shell à chaque session.
  */
 export class SessionStore {
   private readonly root: string;
+  private readonly agentsRoot: string;
 
   constructor(dataDir: string) {
     this.root = path.join(dataDir, "sessions");
+    this.agentsRoot = path.join(dataDir, "agents");
     fs.mkdirSync(this.root, { recursive: true });
+    fs.mkdirSync(this.agentsRoot, { recursive: true });
   }
 
-  open(serverId: string, name: string): AgentSession {
+  createAgent(): AgentIdentity {
+    const agent: AgentIdentity = { id: `ag_${randomBytes(4).toString("hex")}`, createdAt: new Date().toISOString() };
+    writeJsonAtomic(path.join(this.agentsRoot, `${agent.id}.json`), agent);
+    return agent;
+  }
+
+  getAgent(id: string): AgentIdentity {
+    const value = String(id ?? "").trim();
+    if (!AGENT_ID_PATTERN.test(value)) throw new GateError(`Invalid agent id "${id}".`);
+    const file = path.join(this.agentsRoot, `${value}.json`);
+    if (!fs.existsSync(file)) throw new GateError(`Unknown agent id "${id}": use the agent_id returned by your first open_session.`);
+    return readJson<AgentIdentity>(file);
+  }
+
+  open(serverId: string, name: string, agentId: string): AgentSession {
     const label = String(name ?? "").replace(/\s+/g, " ").trim();
     if (!label) throw new GateError("The session name must not be empty.");
     if (label.length > MAX_SESSION_NAME_LENGTH) throw new GateError(`The session name is limited to ${MAX_SESSION_NAME_LENGTH} characters.`);
     const session: AgentSession = {
       id: `sh_${randomBytes(4).toString("hex")}`,
       serverId,
+      agentId: this.getAgent(agentId).id,
       name: label,
       openedAt: new Date().toISOString(),
       closedAt: null,
@@ -60,6 +79,11 @@ export class SessionStore {
     return this.all()
       .filter((session) => !session.closedAt && (serverId === undefined || session.serverId === serverId))
       .sort((a, b) => a.openedAt.localeCompare(b.openedAt));
+  }
+
+  /** Sessions ouvertes par un agent, fermées comprises. */
+  listForAgent(agentId: string): AgentSession[] {
+    return this.all().filter((session) => session.agentId === agentId);
   }
 
   /**

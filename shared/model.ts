@@ -100,12 +100,14 @@ export type SessionState = "connected" | "closed";
 export type SessionCloser = "agent" | "user";
 
 /**
- * Session ouverte par un agent sur un serveur : elle a son propre shell, et l'agent
- * n'est notifié que de ce qui s'y passe.
+ * Session ouverte par un agent sur un serveur : elle a son propre shell, et seul
+ * l'agent qui l'a ouverte est notifié de ce qui s'y passe.
  */
 export interface AgentSession {
   id: string;
   serverId: string;
+  /** Agent qui a ouvert la session : son veilleur reçoit les événements de toutes ses sessions. */
+  agentId: string;
   /** Libellé choisi par l'agent, affiché dans l'interface. */
   name: string;
   openedAt: string;
@@ -114,6 +116,12 @@ export interface AgentSession {
 }
 
 export const MAX_SESSION_NAME_LENGTH = 40;
+
+/** Identité d'un agent, propre à sa conversation : elle rattache ses sessions à un seul veilleur. */
+export interface AgentIdentity {
+  id: string;
+  createdAt: string;
+}
 
 /** Session d'un serveur telle que l'interface l'affiche ; `id` vaut null pour la session « Vous ». */
 export interface SessionView {
