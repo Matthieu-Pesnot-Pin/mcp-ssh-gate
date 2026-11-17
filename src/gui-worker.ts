@@ -17,10 +17,20 @@ import {
   trustedOriginHostnames,
 } from "@imenam/mcp-gui-interface";
 
-import type { RequestsResponse, StateResponse, TerminalClientMessage, TerminalsResponse, TestConnectionResponse } from "../shared/model.js";
+import type {
+  RequestEvaluation,
+  RequestsResponse,
+  StateResponse,
+  TerminalClientMessage,
+  TerminalsResponse,
+  TestConnectionResponse,
+  WhitelistResponse,
+  WhitelistTestResponse,
+} from "../shared/model.js";
 import { APP_VERSION } from "./version.js";
 import { findProjectRoot, loadConfig } from "./core/config.js";
 import { GateError } from "./core/errors.js";
+import { AutoApprover } from "./core/auto-approval.js";
 import { Executor } from "./core/executor.js";
 import { HEARTBEAT_INTERVAL_MS, writeHeartbeat } from "./core/heartbeat.js";
 import { KeyService } from "./core/keys.js";
@@ -30,6 +40,7 @@ import { SessionStore } from "./core/session-store.js";
 import { SettingsStore } from "./core/settings-store.js";
 import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
+import { WhitelistStore, evaluateCommand, evaluateRequest, type AppliedRules } from "./core/whitelist.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = findProjectRoot(__dirname);
@@ -58,6 +69,10 @@ const sessions = new SessionStore(config.dataDir);
 const executor = new Executor(servers, requests, sessions, (message) => logger.info(message));
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
 const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
+const whitelist = new WhitelistStore(config.dataDir);
+const autoApprover = new AutoApprover(servers, requests, whitelist, executor, (message) => logger.info(message));
+
+const AUTO_APPROVAL_INTERVAL_MS = 1000;
 
 // Le worker s'arrête avec le processus MCP qui l'a lancé : canal IPC fermé, ou PID parent disparu.
 const parentPid = process.ppid;
@@ -150,7 +165,15 @@ app.get(
     const server = servers.get(c.req.param("id")!);
     const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 50) || 50, 1), 200);
     const session = sessionParam(c.req.query("session"));
-    return { requests: requests.listForServer(server.id).filter((request) => request.sessionId === session).slice(-limit) };
+    const list = requests.listForServer(server.id).filter((request) => request.sessionId === session).slice(-limit);
+    const file = whitelist.read();
+    const mode = whitelist.modeOf(server.id, file);
+    const evaluations: Record<string, RequestEvaluation> = {};
+    if (mode !== "off") {
+      const rules = whitelist.applied(server, file);
+      for (const request of list) if (request.status === "pending") evaluations[request.id] = evaluateRequest(request, rules, mode);
+    }
+    return { requests: list, evaluations };
   })
 );
 
@@ -162,6 +185,7 @@ app.delete(
     const server = servers.get(c.req.param("id")!);
     terminals.closeForServer(server.id);
     executor.deleteServer(server.id);
+    whitelist.deleteServer(server.id);
     return { deleted: true };
   })
 );
@@ -227,6 +251,55 @@ app.post(
   handle(async (c) => {
     await executor.interrupt(c.req.param("id")!);
     return { interrupted: true };
+  })
+);
+
+/** Liste désignée par le champ `scope` : l'identifiant d'un serveur, ou null pour la liste commune. */
+function scopeParam(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  return servers.get(String(value)).id;
+}
+
+app.get("/api/whitelist", handle((): WhitelistResponse => whitelist.view(servers.list())));
+app.put(
+  "/api/whitelist/servers/:id/mode",
+  handle(async (c): Promise<WhitelistResponse> => {
+    const server = servers.get(c.req.param("id")!);
+    whitelist.setMode(server.id, (await readBody(c))?.mode);
+    return whitelist.view(servers.list());
+  })
+);
+app.post(
+  "/api/whitelist/rules",
+  handle(async (c) => {
+    const body = await readBody(c);
+    return whitelist.addRule(scopeParam(body?.scope), body?.rule);
+  })
+);
+app.put(
+  "/api/whitelist/rules/:id",
+  handle(async (c) => {
+    const body = await readBody(c);
+    return whitelist.updateRule(c.req.param("id")!, scopeParam(body?.scope), body?.rule);
+  })
+);
+app.delete(
+  "/api/whitelist/rules/:id",
+  handle((c) => {
+    whitelist.deleteRule(c.req.param("id")!);
+    return { deleted: true };
+  })
+);
+app.post(
+  "/api/whitelist/test",
+  handle(async (c): Promise<WhitelistTestResponse> => {
+    const body = await readBody(c);
+    const command = String(body?.command ?? "").trim();
+    if (!command) throw new GateError("Tape une commande à tester.");
+    const scope = scopeParam(body?.scope);
+    const file = whitelist.read();
+    const rules: AppliedRules = scope === null ? { common: file.common, server: [], serverName: "" } : whitelist.applied(servers.get(scope), file);
+    return { evaluation: evaluateCommand(command, rules) };
   })
 );
 
@@ -343,6 +416,7 @@ function listen(port: number, publicUrl: string) {
   const instance = serve({ fetch: app.fetch, port, hostname: GUI_LISTEN_HOST }, (info) => {
     logger.info(`GUI listening on port ${info.port}`);
     executor.recoverAbandoned();
+    setInterval(() => autoApprover.run(), AUTO_APPROVAL_INTERVAL_MS);
     writeHeartbeat(config.dataDir, publicUrl);
     setInterval(() => writeHeartbeat(config.dataDir, publicUrl), HEARTBEAT_INTERVAL_MS);
     safeSend({ type: "READY", data: { port: info.port, url: publicUrl } });

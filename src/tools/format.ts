@@ -56,6 +56,7 @@ export function formatRequest(request: GateRequest, server: StoredServer | null,
   const author = request.source === "user" ? ` — typed by the user${request.sharedAt ? " and shared with you" : ""}` : "";
   const lines = [`Request ${request.id} on ${target}${author}: ${STATUS_TEXT[request.status]}.`];
 
+  if (request.autoApproval) lines.push(`Approved automatically by the user's whitelist (rules: ${request.autoApproval.rules.join(", ")}).`);
   if (request.explanation) lines.push(`Your explanation: ${request.explanation}`);
   if (request.note) lines.push(`${request.status === "refused" ? "Reason given by the user" : "Note from the user"}: ${request.note}`);
   else if (request.status === "refused") lines.push("The user gave no reason.");

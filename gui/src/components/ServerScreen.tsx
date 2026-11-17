@@ -1,12 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Ban, Bot, CornerDownLeft, Ellipsis, Folder, KeyRound, NotebookPen, Pencil, Power, RefreshCw, Server, Trash2, Unplug, User } from 'lucide-react'
-import { isReady, type GateRequest, type ServerView, type SessionView } from '@shared/model'
+import { isReady, type GateRequest, type RequestEvaluation, type SegmentEvaluation, type ServerView, type SessionView } from '@shared/model'
 import { api } from '../api'
 import { ago, plural } from '../format'
 import { usePolling } from '../usePolling'
 import { Journal } from './Journal'
 import { RequestCard, RunCard } from './Cards'
 import { NotesView } from './NotesView'
+import { RuleModal, type RuleOrigin } from './Whitelist'
+
+interface Authorizing {
+  segment: SegmentEvaluation
+  origin: RuleOrigin
+}
 
 interface MenuProps {
   server: ServerView
@@ -218,11 +224,21 @@ export function ServerScreen(props: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [authorizing, setAuthorizing] = useState<Authorizing | null>(null)
 
   const requests: GateRequest[] = polled.data?.requests ?? []
   const finished = requests.filter((r) => r.status !== 'pending' && r.status !== 'running')
   const running = requests.find((r) => r.status === 'running') ?? null
   const pending = requests.filter((r) => r.status === 'pending')
+  const evaluation: RequestEvaluation | null = pending[0] ? polled.data?.evaluations[pending[0].id] ?? null : null
+
+  function authorize(commandIndex: number, segment: SegmentEvaluation) {
+    if (!evaluation) return
+    const others = evaluation.commands.flatMap((command, index) =>
+      command.segments.filter((other) => other.verdict !== 'covered' && !(index === commandIndex && other === segment)).map((other) => other.text)
+    )
+    setAuthorizing({ segment, origin: { text: segment.text, sessionName: session.name, otherPending: others } })
+  }
 
   const lastSignature = requests.length ? `${requests[requests.length - 1].id}:${requests[requests.length - 1].status}:${running?.commands.map((c) => c.output.length).join(',')}` : ''
 
@@ -319,13 +335,37 @@ export function ServerScreen(props: Props) {
             {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
             {polled.data && <Journal requests={finished} onChanged={refresh} onError={onError} />}
             {running && <RunCard request={running} onError={onError} />}
-            {pending[0] && <RequestCard request={pending[0]} queued={pending.length - 1} busy={session.busy || !!running} onDone={refresh} onError={onError} />}
+            {pending[0] && (
+              <RequestCard
+                request={pending[0]}
+                queued={pending.length - 1}
+                busy={session.busy || !!running}
+                evaluation={evaluation}
+                onAuthorize={authorize}
+                onDone={refresh}
+                onError={onError}
+              />
+            )}
           </div>
 
           <footer className="footer">
             <ManualPrompt server={server} session={session} disabledReason={disabledReason} onRun={refresh} onError={onError} />
           </footer>
         </div>
+
+        {authorizing && (
+          <RuleModal
+            servers={[server]}
+            scopes={[null, server.id]}
+            initialScope={server.id}
+            command={authorizing.segment.command ?? ''}
+            prefillForm={authorizing.segment.args ? authorizing.segment.args : null}
+            prefillSudo={authorizing.segment.sudo}
+            origin={authorizing.origin}
+            onClose={() => setAuthorizing(null)}
+            onSaved={refresh}
+          />
+        )}
 
         {notesOpen && (
           <aside className="notes-panel">

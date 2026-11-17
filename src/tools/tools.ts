@@ -131,6 +131,8 @@ export const TOOL_DEFINITIONS: Tool[] = [
     name: "submit_commands",
     description:
       `Submit shell commands to run in your session, on the server it was opened on (open_session). Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
+      `Exception: when the user enabled a whitelist on that server and it covers every part of every command (each part between &&, ||, ;, | or &), the request runs right away without waiting. ` +
+      `Variables, $( ), redirections to files, bash -c, xargs and the like are never covered: keep commands plain when you can. ` +
       `Approved commands run in order in the persistent bash shell of your session (cd and export carry over between commands and between your requests, never to other sessions), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
       `Execution stops at the first command that exits non-zero. Returns a request_id. Call enable_notifications first and keep working: you are notified when the request is finished, then read the outcome with get_result. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
@@ -344,7 +346,7 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
     `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
     `If you have not called enable_notifications with your agent_id ${session.agentId} in this conversation, do it now.`;
   return text(
-    `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It is waiting for the user's approval${url ? ` in the GUI: ${url}` : " in the GUI"}.\n${next}`
+    `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It runs once the user approves it${url ? ` in the GUI (${url})` : " in the GUI"}, or right away if their whitelist covers it.\n${next}`
   );
 }
 

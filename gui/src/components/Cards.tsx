@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Check, Circle, CircleCheck, CircleX, Info, LoaderCircle, OctagonX, Pencil, Play, Sparkles, Square, X } from 'lucide-react'
-import type { CommandRun, GateRequest } from '@shared/model'
+import { Check, Circle, CircleCheck, CircleX, Eye, Info, LoaderCircle, OctagonX, Pencil, Play, ShieldCheck, Sparkles, Square, X } from 'lucide-react'
+import type { CommandRun, GateRequest, RequestEvaluation, SegmentEvaluation } from '@shared/model'
 import { api } from '../api'
 import { clock, elapsed, plural, seconds } from '../format'
 import { CommandText } from './CommandText'
 import { ExplainableCommand } from './Explanations'
+import { SegmentList, segmentSummary } from './Whitelist'
 
 interface RequestCardProps {
   request: GateRequest
@@ -12,12 +13,33 @@ interface RequestCardProps {
   queued: number
   /** Une exécution occupe déjà le serveur. */
   busy: boolean
+  /** Lecture par la liste blanche ; absente quand elle est désactivée sur le serveur. */
+  evaluation: RequestEvaluation | null
+  onAuthorize: (commandIndex: number, segment: SegmentEvaluation) => void
   onDone: () => void
   onError: (message: string) => void
 }
 
+/** Bandeau de la liste blanche quand toutes les parties sont couvertes. */
+function CoveredNote({ evaluation }: { evaluation: RequestEvaluation }) {
+  if (evaluation.mode === 'observe') {
+    return (
+      <div className="wl-note">
+        <Eye size={16} />
+        Mode Observation : cette demande aurait été approuvée automatiquement.
+      </div>
+    )
+  }
+  return (
+    <div className="wl-note ok">
+      <ShieldCheck size={16} />
+      Couverte par la liste blanche : elle s'exécute dès que la session est libre.
+    </div>
+  )
+}
+
 /** Demande de l'agent en attente : commandes modifiables, note, refus ou exécution. */
-export function RequestCard({ request, queued, busy, onDone, onError }: RequestCardProps) {
+export function RequestCard({ request, queued, busy, evaluation, onAuthorize, onDone, onError }: RequestCardProps) {
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
   const [note, setNote] = useState('')
@@ -127,6 +149,21 @@ export function RequestCard({ request, queued, busy, onDone, onError }: RequestC
         ))}
       </div>
 
+      {evaluation && (
+        <div className="wl-breakdown">
+          <div className="field-label">
+            Découpage · <span className={evaluation.covered ? 'status-ok' : 'status-warn'}>{segmentSummary(evaluation.commands)}</span>
+          </div>
+          {evaluation.commands.map((commandEvaluation, index) => (
+            <div key={index}>
+              {count > 1 && <div className="wl-cmd-label">Commande {index + 1}</div>}
+              <SegmentList evaluation={commandEvaluation} onAuthorize={editing === null ? (segment) => onAuthorize(index, segment) : undefined} />
+            </div>
+          ))}
+          {evaluation.covered && <CoveredNote evaluation={evaluation} />}
+        </div>
+      )}
+
       <div>
         <div className="field-label">Note pour l'agent (facultatif)</div>
         <textarea className="textarea" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Jointe au résultat, ou motif du refus" />
@@ -135,7 +172,11 @@ export function RequestCard({ request, queued, busy, onDone, onError }: RequestC
       <div className="card-foot">
         <span className="hint">
           <Info size={16} />
-          {busy ? 'Une exécution est en cours sur ce serveur.' : `Exécutées dans l'ordre, dans le shell ouvert. Arrêt à la première erreur.`}
+          {busy
+            ? 'Une exécution est en cours sur ce serveur.'
+            : evaluation && !evaluation.covered
+              ? 'Approuver exécute les commandes entières, sans modifier la liste blanche.'
+              : `Exécutées dans l'ordre, dans le shell ouvert. Arrêt à la première erreur.`}
         </span>
         <button className="btn btn-secondary" onClick={() => void act(() => api.refuse(request.id, note))} disabled={sending || editing !== null}>
           Refuser
@@ -256,7 +297,11 @@ export function RunCard({ request, onError }: RunCardProps) {
       <div className="card-foot">
         <span className="hint">
           <Info size={16} />
-          {request.source === 'agent' ? "L'agent reçoit le résultat complet dès la fin du lot, avec ta note s'il y en a une." : 'Commande saisie par toi : son résultat reste visible par l’agent dans l’historique.'}
+          {request.autoApproval
+            ? `Approuvée par la liste blanche (${request.autoApproval.rules.join(', ')}).`
+            : request.source === 'agent'
+              ? "L'agent reçoit le résultat complet dès la fin du lot, avec ta note s'il y en a une."
+              : 'Commande saisie par toi : son résultat reste visible par l’agent dans l’historique.'}
         </span>
         <button className="btn btn-danger" onClick={() => void interrupt()} disabled={stopping}>
           <Square size={14} strokeWidth={2.5} />

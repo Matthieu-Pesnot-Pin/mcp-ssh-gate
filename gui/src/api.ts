@@ -1,4 +1,21 @@
-import type { GateRequest, GuiSettings, HighlightPalette, LineBreakMode, RequestsResponse, RotationResponse, ServerView, StateResponse, TerminalView, TerminalsResponse, TestConnectionResponse } from '@shared/model'
+import type {
+  GateRequest,
+  GuiSettings,
+  HighlightPalette,
+  LineBreakMode,
+  RequestsResponse,
+  RotationResponse,
+  ServerView,
+  StateResponse,
+  TerminalView,
+  TerminalsResponse,
+  TestConnectionResponse,
+  WhitelistMode,
+  WhitelistResponse,
+  WhitelistRule,
+  WhitelistRuleInput,
+  WhitelistTestResponse,
+} from '@shared/model'
 
 export interface ServerFields {
   name: string
@@ -64,6 +81,12 @@ export const api = {
   interrupt: (id: string) => send<{ interrupted: true }>('POST', `${req(id)}/interrupt`),
   setPalette: (palette: HighlightPalette) => send<GuiSettings>('PUT', 'settings/palette', { palette }),
   setLineBreaks: (lineBreaks: LineBreakMode) => send<GuiSettings>('PUT', 'settings/line-breaks', { lineBreaks }),
+  whitelist: () => request<WhitelistResponse>('whitelist'),
+  setWhitelistMode: (serverId: string, mode: WhitelistMode) => send<WhitelistResponse>('PUT', `whitelist/servers/${encodeURIComponent(serverId)}/mode`, { mode }),
+  addRule: (scope: string | null, rule: WhitelistRuleInput) => send<WhitelistRule>('POST', 'whitelist/rules', { scope, rule }),
+  updateRule: (id: string, scope: string | null, rule: WhitelistRuleInput) => send<WhitelistRule>('PUT', `whitelist/rules/${encodeURIComponent(id)}`, { scope, rule }),
+  deleteRule: (id: string) => send<{ deleted: true }>('DELETE', `whitelist/rules/${encodeURIComponent(id)}`),
+  testWhitelist: (scope: string | null, command: string) => send<WhitelistTestResponse>('POST', 'whitelist/test', { scope, command }),
 }
 
 /**

@@ -50,6 +50,14 @@ export interface GateRequest {
   commands: CommandRun[];
   /** Questions de l'utilisateur sur des instructions de ces commandes. */
   questions: CommandQuestion[];
+  /** Approbation par la liste blanche, à la place de l'utilisateur ; null pour une demande validée à la main. */
+  autoApproval: AutoApproval | null;
+}
+
+export interface AutoApproval {
+  at: string;
+  /** Règles qui ont couvert les parties des commandes, sous la forme « commune · cd » ou « prod-web · npm ». */
+  rules: string[];
 }
 
 /**
@@ -175,6 +183,82 @@ export interface StateResponse {
 
 export interface RequestsResponse {
   requests: GateRequest[];
+  /** Lecture par la liste blanche des demandes en attente, par identifiant ; absente quand la liste blanche du serveur est désactivée. */
+  evaluations: Record<string, RequestEvaluation>;
+}
+
+/**
+ * Liste blanche d'un serveur : "off" laisse tout à valider, "observe" annote les demandes
+ * sans rien approuver, "active" exécute sans attendre les demandes entièrement couvertes.
+ */
+export const WHITELIST_MODES = ["off", "observe", "active"] as const;
+
+export type WhitelistMode = (typeof WHITELIST_MODES)[number];
+
+/** Règle d'une commande, dans la liste commune ou dans celle d'un serveur. */
+export interface WhitelistRule {
+  id: string;
+  /** Nom de la commande, sans chemin : `systemctl`. */
+  command: string;
+  /** Vrai : tous les arguments sont acceptés ; faux : seules les formes listées. */
+  anyUse: boolean;
+  /** Arguments acceptés après la commande, mot à mot ; `*` accepte n'importe quelle suite d'arguments. */
+  forms: string[];
+  /** Mots ou options refusés même dans une forme acceptée ; un `*` final accepte tout suffixe : `--vacuum-*`. */
+  deny: string[];
+  /** La commande est acceptée précédée de sudo. */
+  sudo: boolean;
+}
+
+export type WhitelistRuleInput = Omit<WhitelistRule, "id">;
+
+export interface WhitelistServerView {
+  serverId: string;
+  mode: WhitelistMode;
+  rules: WhitelistRule[];
+}
+
+export interface WhitelistResponse {
+  common: WhitelistRule[];
+  /** Un élément par serveur configuré, dans l'ordre de la barre latérale. */
+  servers: WhitelistServerView[];
+}
+
+/** "covered" : une règle couvre la partie ; "uncovered" : aucune ne la couvre ; "excluded" : aucune règle ne peut la couvrir. */
+export type SegmentVerdict = "covered" | "uncovered" | "excluded";
+
+/** Partie d'une commande délimitée par un séparateur (&&, ||, ;, |, |&, &, saut de ligne). */
+export interface SegmentEvaluation {
+  /** Texte de la partie, tel qu'il est écrit dans la commande. */
+  text: string;
+  /** Séparateur qui précède la partie ; null pour la première. */
+  separator: string | null;
+  verdict: SegmentVerdict;
+  /** Règle qui couvre la partie, sous la forme « commune · cd » ; null si elle n'est pas couverte. */
+  rule: string | null;
+  /** Raison pour laquelle la partie n'est pas couverte ; null si elle l'est. */
+  reason: string | null;
+  /** Nom de la commande, sans sudo ni chemin, quand une règle peut la couvrir. */
+  command: string | null;
+  /** Arguments de la commande, pour pré-remplir une forme. */
+  args: string | null;
+  sudo: boolean;
+}
+
+export interface CommandEvaluation {
+  segments: SegmentEvaluation[];
+  covered: boolean;
+}
+
+export interface RequestEvaluation {
+  mode: WhitelistMode;
+  /** Vrai quand chaque partie de chaque commande est couverte. */
+  covered: boolean;
+  commands: CommandEvaluation[];
+}
+
+export interface WhitelistTestResponse {
+  evaluation: CommandEvaluation;
 }
 
 /** Place de la clé de SSH Gate sur le serveur, relevée par la connexion de test. */

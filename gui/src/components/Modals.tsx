@@ -5,7 +5,7 @@ import { CommandText } from './CommandText'
 import { DEDICATED_KEY_FILE, REVOKE_COMMAND, installCommand } from '@shared/install'
 import { api, type ServerFields } from '../api'
 
-function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
+export function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer: ReactNode }) {
   return (
     <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-label={title} onKeyDown={(e) => e.key === 'Escape' && onClose()}>

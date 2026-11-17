@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { MAX_STATEMENT_LENGTH, isFinalStatus, type GateRequest, type RequestStatus, type ServerView, type SessionView } from "../../shared/model.js";
+import { MAX_STATEMENT_LENGTH, isFinalStatus, type AutoApproval, type GateRequest, type RequestStatus, type ServerView, type SessionView } from "../../shared/model.js";
+import { protectCommand } from "./command-parser.js";
 import { GateError } from "./errors.js";
 import type { RequestStore } from "./request-store.js";
 import { toPublic, type ServerInput, type ServerStore, type StoredServer } from "./server-store.js";
@@ -195,6 +196,34 @@ export class Executor {
     return updated;
   }
 
+  /**
+   * Exécute une demande de l'agent sans attendre l'utilisateur quand `decide` la juge
+   * couverte par la liste blanche. La décision est reprise sous le verrou de la demande,
+   * sur ses commandes du moment. Renvoie null quand la demande reste en attente.
+   */
+  approveByWhitelist(requestId: string, decide: (draft: GateRequest) => AutoApproval | null): GateRequest | null {
+    const request = this.requests.get(requestId);
+    if (request.source !== "agent" || this.running.has(keyOf(request))) return null;
+    let approved = false;
+    const updated = this.requests.update(requestId, (draft) => {
+      if (draft.status !== "pending") return;
+      const approval = decide(draft);
+      if (!approval) return;
+      draft.status = "running";
+      draft.decidedAt = approval.at;
+      draft.autoApproval = approval;
+      approved = true;
+    });
+    if (!approved) return null;
+    this.start(updated);
+    return updated;
+  }
+
+  /** Vrai quand une demande s'exécute dans la session de cette demande. */
+  isSessionBusy(request: GateRequest): boolean {
+    return this.running.has(keyOf(request));
+  }
+
   refuse(requestId: string, note: unknown): GateRequest {
     return this.requests.update(requestId, (draft) => {
       if (draft.status !== "pending") throw new GateError(`Cette demande n'est plus en attente (${draft.status}).`);
@@ -383,7 +412,16 @@ export class Executor {
         return;
       }
 
-      const command = this.requests.get(request.id).commands[index].command;
+      const current = this.requests.get(request.id);
+      let command = current.commands[index].command;
+      if (current.autoApproval) {
+        try {
+          command = protectCommand(command);
+        } catch (err: any) {
+          this.finish(request.id, "failed", `Commande ${index + 1} non exécutée : ${err.message}`, index);
+          return;
+        }
+      }
       const stopped = await this.runOne(request.id, index, command, session, entry);
       if (stopped) {
         this.finish(request.id, stopped.status, stopped.error, index + 1);

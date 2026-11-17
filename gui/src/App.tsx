@@ -8,6 +8,7 @@ import { readLastViews, useSidebarWidth, writeLastViews, type LastView } from '.
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
 import { TerminalsScreen } from './components/TerminalsScreen'
+import { WhitelistScreen, type WhitelistScope } from './components/Whitelist'
 import { ConfirmDeleteModal, EditServerModal, RevokeKeyModal, RotateKeyModal, ServerModal, SettingsModal } from './components/Modals'
 
 type Dialog = { kind: 'add' | 'settings' } | { kind: 'key' | 'edit' | 'delete' | 'rotate' | 'revoke'; server: ServerView } | null
@@ -27,6 +28,18 @@ function terminalsFromHash(): TerminalsView | null {
 
 function terminalsHash(serverId: string | null): string {
   return serverId ? `${TERMINALS_HASH}/${encodeURIComponent(serverId)}` : TERMINALS_HASH
+}
+
+const WHITELIST_HASH = '#liste-blanche'
+
+/** Adresse de la liste blanche : `#liste-blanche` pour la liste commune, `#liste-blanche/<serveur>` pour celle d'un serveur. */
+function whitelistFromHash(): { scope: WhitelistScope } | null {
+  const match = /^#liste-blanche(?:\/([^/]+))?$/.exec(window.location.hash)
+  return match ? { scope: match[1] ? decodeURIComponent(match[1]) : null } : null
+}
+
+function whitelistHash(scope: WhitelistScope): string {
+  return scope === null ? WHITELIST_HASH : `${WHITELIST_HASH}/${encodeURIComponent(scope)}`
 }
 
 interface Selection {
@@ -61,6 +74,7 @@ export default function App() {
   const terminals = usePolling('terminals', api.terminals, 2500)
   const [selection, setSelection] = useState<Selection | null>(selectionFromHash)
   const [terminalsView, setTerminalsView] = useState<TerminalsView | null>(terminalsFromHash)
+  const [whitelistView, setWhitelistView] = useState<{ scope: WhitelistScope } | null>(whitelistFromHash)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
@@ -70,6 +84,7 @@ export default function App() {
     const onHash = () => {
       setSelection(selectionFromHash())
       setTerminalsView(terminalsFromHash())
+      setWhitelistView(whitelistFromHash())
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
@@ -165,10 +180,12 @@ export default function App() {
         width={sidebarWidth}
         onResize={setSidebarWidth}
         servers={servers}
-        selectedId={terminalsView ? terminalsView.serverId : selected?.id ?? null}
+        selectedId={whitelistView ? null : terminalsView ? terminalsView.serverId : selected?.id ?? null}
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={select}
         terminalsView={terminalsView}
+        whitelistOpen={!!whitelistView}
+        onOpenWhitelist={() => (window.location.hash = WHITELIST_HASH)}
         terminals={terminalList}
         onSelect={openServer}
         onOpenTerminals={(serverId) => (window.location.hash = terminalsHash(serverId))}
@@ -176,7 +193,14 @@ export default function App() {
         onSettings={() => setDialog({ kind: 'settings' })}
       />
 
-      {terminalsView ? (
+      {whitelistView ? (
+        <WhitelistScreen
+          servers={servers}
+          scope={whitelistView.scope !== null && state.data && !servers.some((s) => s.id === whitelistView.scope) ? null : whitelistView.scope}
+          onScope={(scope) => (window.location.hash = whitelistHash(scope))}
+          onError={setNotice}
+        />
+      ) : terminalsView ? (
         <TerminalsScreen
           key={terminalsView.serverId ?? ''}
           servers={servers}

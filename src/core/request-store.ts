@@ -40,10 +40,10 @@ function normalizeCommands(commands: string[]): string[] {
   });
 }
 
-/** Lit un fichier de demande ; une demande enregistrée avant les questions n'en a aucune. */
+/** Lit un fichier de demande ; les champs absents des demandes enregistrées avant leur ajout prennent leur valeur vide. */
 export function readRequestFile(file: string): GateRequest {
   const request = readJson<GateRequest>(file);
-  return { ...request, questions: request.questions ?? [] };
+  return { ...request, questions: request.questions ?? [], autoApproval: request.autoApproval ?? null };
 }
 
 /**
@@ -76,6 +76,7 @@ export class RequestStore {
       error: null,
       cwd: null,
       questions: [],
+      autoApproval: null,
       commands: commands.map((command) => ({
         command,
         original: null,

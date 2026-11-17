@@ -20,6 +20,8 @@ import { RequestStore } from "../src/core/request-store.js";
 import { ServerStore } from "../src/core/server-store.js";
 import { SessionStore } from "../src/core/session-store.js";
 import { generateVaultKey, parseVaultKey } from "../src/core/vault.js";
+import { AutoApprover } from "../src/core/auto-approval.js";
+import { WhitelistStore } from "../src/core/whitelist.js";
 
 interface FakeSsh {
   port: number;
@@ -214,6 +216,58 @@ test("approved commands run in the persistent shell of their session and stop at
 
   sessions.close(logs.id, "agent", requests);
   assert.deepEqual(executor.views()[0].sessions.map((s) => s.id), [null]);
+});
+
+test("the whitelist runs covered requests in order, past aliases and functions of the session", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-auto-"));
+  const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
+  const requests = new RequestStore(dataDir);
+  const sessions = new SessionStore(dataDir);
+  const whitelist = new WhitelistStore(dataDir);
+  const executor = new Executor(servers, requests, sessions, () => {});
+  const approver = new AutoApprover(servers, requests, whitelist, executor, () => {});
+
+  const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
+  const fake = await startFakeSshServer({ key: placeholder.publicKey! });
+  t.after(() => {
+    executor.disconnect("local");
+    fake.close();
+  });
+  servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
+  await executor.testConnection("local");
+
+  whitelist.addRule(null, { command: "echo", anyUse: true });
+  whitelist.addRule("local", { command: "basename", forms: ["*"] });
+  const session = sessions.open("local", "auto", sessions.createAgent().id);
+  await waitFinal(requests, executor.runManual("local", session.id, "echo() { builtin echo hijacked; }; shopt -s expand_aliases; alias basename='builtin echo aliased'").id);
+
+  const trapped = await waitFinal(requests, executor.runManual("local", session.id, "echo ok; basename /srv/fine").id);
+  assert.equal(trapped.commands[0].output, "hijacked\naliased /srv/fine\n");
+
+  const covered = requests.create({ serverId: "local", source: "agent", sessionId: session.id, explanation: "covered", commands: ["echo ok && basename /srv/fine"] });
+  approver.run();
+  assert.equal(requests.get(covered.id).status, "pending", "the whitelist is off until the user turns it on");
+
+  whitelist.setMode("local", "observe");
+  approver.run();
+  assert.equal(requests.get(covered.id).status, "pending", "observation never approves");
+
+  whitelist.setMode("local", "active");
+  approver.run();
+  const done = await waitFinal(requests, covered.id);
+  assert.equal(done.status, "completed");
+  assert.equal(done.commands[0].output, "ok\nfine\n");
+  assert.deepEqual(done.autoApproval?.rules, ["commune · echo", "local · basename"]);
+  assert.equal(done.commands[0].command, "echo ok && basename /srv/fine");
+
+  const blocked = requests.create({ serverId: "local", source: "agent", sessionId: session.id, explanation: "not covered", commands: ["uptime"] });
+  const after = requests.create({ serverId: "local", source: "agent", sessionId: session.id, explanation: "covered, queued", commands: ["echo later"] });
+  approver.run();
+  assert.equal(requests.get(blocked.id).status, "pending");
+  assert.equal(requests.get(after.id).status, "pending", "a later request never jumps ahead of a pending one");
+  executor.refuse(blocked.id, null);
+  approver.run();
+  assert.equal((await waitFinal(requests, after.id)).commands[0].output, "later\n");
 });
 
 test("an interactive terminal streams the shell, replays its output and follows resizes", async (t) => {

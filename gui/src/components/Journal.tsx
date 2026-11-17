@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Ban, Check, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, OctagonX, Send } from 'lucide-react'
+import { Ban, Check, ChevronDown, ChevronRight, CircleCheck, CircleSlash, CircleX, OctagonX, Send, ShieldCheck } from 'lucide-react'
 import type { CommandRun, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { clock, plural, seconds } from '../format'
@@ -64,6 +64,12 @@ function CommandEntry({ request, index, defaultOpen, onChanged, onError }: Entry
           {!ran ? command.command : open ? <ExplainableCommand request={request} commandIndex={index} onChanged={onChanged} onError={onError} /> : <CommandText command={command.command} />}
         </div>
         <span className="entry-status">
+          {request.autoApproval && (
+            <span className="chip-auto" title={`Règles : ${request.autoApproval.rules.join(', ')}`}>
+              <ShieldCheck size={12} />
+              Auto · liste blanche
+            </span>
+          )}
           {statusText(command)}
           <StatusIcon command={command} />
         </span>

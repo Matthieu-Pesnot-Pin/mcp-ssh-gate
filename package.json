@@ -45,6 +45,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "dotenv": "^18.0.10",
     "hono": "^4.13.17",
+    "sh-syntax": "^0.8.7",
     "ssh2": "^1.17.0",
     "ws": "^8.22.2",
     "zod": "^4.6.7"

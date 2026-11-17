@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent } from 'react'
-import { Bot, ChevronDown, ChevronRight, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, ListChecks, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
 import type { ServerView, SessionView, TerminalView } from '@shared/model'
 import { SIDEBAR_DEFAULT_WIDTH } from '../prefs'
 
@@ -11,6 +11,9 @@ interface Props {
   selectedSessionId: string | null
   /** Vue Terminaux affichée : null si aucune, serverId null pour celle de tous les serveurs. */
   terminalsView: { serverId: string | null } | null
+  /** Vrai quand la page de la liste blanche est affichée. */
+  whitelistOpen: boolean
+  onOpenWhitelist: () => void
   terminals: TerminalView[]
   onSelect: (id: string) => void
   onSelectSession: (serverId: string, sessionId: string | null) => void
@@ -72,7 +75,22 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
  * serveur, déplié par son chevron : ses terminaux, ta session, puis celles des agents.
  * Un clic sur la ligne d'un serveur ouvre son onglet sans le déplier.
  */
-export function Sidebar({ width, onResize, servers, selectedId, selectedSessionId, terminalsView, terminals, onSelect, onSelectSession, onOpenTerminals, onAdd, onSettings }: Props) {
+export function Sidebar({
+  width,
+  onResize,
+  servers,
+  selectedId,
+  selectedSessionId,
+  terminalsView,
+  whitelistOpen,
+  onOpenWhitelist,
+  terminals,
+  onSelect,
+  onSelectSession,
+  onOpenTerminals,
+  onAdd,
+  onSettings,
+}: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
   function toggle(id: string) {
@@ -93,10 +111,15 @@ export function Sidebar({ width, onResize, servers, selectedId, selectedSessionI
         <span>Terminaux</span>
         {terminals.length > 0 ? <span className="nav-count">{terminals.length}</span> : <span />}
       </button>
+      <button className={`nav-row${whitelistOpen ? ' selected' : ''}`} onClick={onOpenWhitelist}>
+        <ListChecks size={20} />
+        <span>Liste blanche</span>
+        <span />
+      </button>
       <div className="side-label">SERVEURS</div>
       <div className="server-list">
         {servers.map((server) => {
-          const selected = terminalsView === null && server.id === selectedId
+          const selected = terminalsView === null && !whitelistOpen && server.id === selectedId
           const terminalsSelected = terminalsView?.serverId === server.id
           const terminalCount = terminals.filter((t) => t.serverId === server.id).length
           const open = expanded.has(server.id)
