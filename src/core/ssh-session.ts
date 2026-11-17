@@ -31,10 +31,11 @@ export function fingerprintOf(key: Buffer): string {
  * le shell courant (un `cd` ou un `export` persiste), l'entrée vient de
  * /dev/null (une commande qui attend une saisie reçoit une fin de fichier) et
  * stderr est fusionné dans stdout. Le marqueur final porte le code de retour et
- * le répertoire courant.
+ * le répertoire courant ; il est écrit par `\builtin printf`, que ni un alias ni
+ * une fonction `printf` définis dans le shell ne remplacent.
  */
 export function wrapCommand(command: string, token: string): string {
-  return `{\n${command}\n} </dev/null 2>&1\n__sg_rc=$?\nprintf '\\n${END_MARKER_PREFIX}%s_%s_%s__\\n' '${token}' "$__sg_rc" "$PWD"\n`;
+  return `{\n${command}\n} </dev/null 2>&1\n__sg_rc=$?\n\\builtin printf '\\n${END_MARKER_PREFIX}%s_%s_%s__\\n' '${token}' "$__sg_rc" "$PWD"\n`;
 }
 
 /**

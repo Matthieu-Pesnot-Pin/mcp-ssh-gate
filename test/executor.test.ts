@@ -239,7 +239,7 @@ test("the whitelist runs covered requests in order, past aliases and functions o
   whitelist.addRule(null, { command: "echo", anyUse: true });
   whitelist.addRule("local", { command: "basename", forms: ["*"] });
   const session = sessions.open("local", "auto", sessions.createAgent().id);
-  await waitFinal(requests, executor.runManual("local", session.id, "echo() { builtin echo hijacked; }; shopt -s expand_aliases; alias basename='builtin echo aliased'").id);
+  await waitFinal(requests, executor.runManual("local", session.id, "echo() { builtin echo hijacked; }; printf() { :; }; shopt -s expand_aliases; alias basename='builtin echo aliased'; alias printf='builtin echo aliased'").id);
 
   const trapped = await waitFinal(requests, executor.runManual("local", session.id, "echo ok; basename /srv/fine").id);
   assert.equal(trapped.commands[0].output, "hijacked\naliased /srv/fine\n");

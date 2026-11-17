@@ -180,3 +180,28 @@ test("settings: defaults, persistence of each setting, and rejection of unknown 
   fs.writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ palette: "fluo" }));
   assert.throws(() => store.get(), /valeur inconnue pour palette/);
 });
+
+test("events of the same instant are announced in creation order", () => {
+  const dataDir = tempDir();
+  const requests = new RequestStore(dataDir);
+  const sessions = new SessionStore(dataDir);
+  const agent = sessions.createAgent();
+  const web = sessions.open("web", "deploy", agent.id);
+  const db = sessions.open("db", "migration", agent.id);
+  const first = requests.create({ serverId: "web", source: "agent", sessionId: web.id, explanation: "x", commands: ["ls"] });
+  const second = requests.create({ serverId: "db", source: "agent", sessionId: db.id, explanation: "y", commands: ["ls"] });
+  const at = new Date().toISOString();
+  for (const id of [second.id, first.id]) {
+    requests.update(id, (draft) => {
+      draft.status = "completed";
+      draft.finishedAt = at;
+      draft.commands[0].status = "succeeded";
+      draft.commands[0].exitCode = 0;
+    });
+  }
+  const events = new RequestEventScanner(requests, sessions, agent.id).since(0);
+  assert.deepEqual(
+    events.map((event) => (event.kind === "closed" ? event.sessionId : event.id)),
+    [first.id, second.id]
+  );
+});

@@ -109,7 +109,7 @@ export class RequestEventScanner {
       if (entry.sessionId === null || !ids.has(entry.sessionId)) continue;
       for (const event of entry.events) if (event.eventMs > cursor) found.push(event);
     }
-    return found.sort((a, b) => a.eventMs - b.eventMs);
+    return found.sort((a, b) => a.eventMs - b.eventMs || orderKey(a).localeCompare(orderKey(b)));
   }
 
   private toEvents(request: GateRequest): GateEvent[] {
@@ -152,6 +152,11 @@ export class RequestEventScanner {
       commands: request.commands.map((c) => ({ status: c.status, exitCode: c.exitCode })),
     };
   }
+}
+
+/** Départage deux événements du même instant : l'identifiant de demande suit l'ordre de création. */
+function orderKey(event: GateEvent): string {
+  return event.kind === "closed" ? event.sessionId : event.id;
 }
 
 /** Curseur après annonce des événements donnés. */
