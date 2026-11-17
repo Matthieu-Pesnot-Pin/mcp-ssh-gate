@@ -1,8 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState, type PointerEvent } from 'react'
 import { Bot, ChevronDown, ChevronRight, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
 import type { ServerView, SessionView, TerminalView } from '@shared/model'
+import { SIDEBAR_DEFAULT_WIDTH } from '../prefs'
 
 interface Props {
+  width: number
+  onResize: (width: number) => void
   servers: ServerView[]
   selectedId: string | null
   selectedSessionId: string | null
@@ -28,18 +31,55 @@ function SessionState({ session }: { session: SessionView }) {
   return <span />
 }
 
+/** Poignée du bord droit : glisser change la largeur, un double-clic rend la largeur par défaut. */
+function ResizeHandle({ width, onResize }: { width: number; onResize: (width: number) => void }) {
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  function onPointerDown(event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = { startX: event.clientX, startWidth: width }
+    document.body.classList.add('resizing')
+  }
+
+  function onPointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (drag.current) onResize(drag.current.startWidth + event.clientX - drag.current.startX)
+  }
+
+  function onPointerUp() {
+    drag.current = null
+    document.body.classList.remove('resizing')
+  }
+
+  return (
+    <div
+      className="sidebar-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-valuenow={width}
+      title="Glisser pour redimensionner, double-clic pour la largeur par défaut"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={() => onResize(SIDEBAR_DEFAULT_WIDTH)}
+    />
+  )
+}
+
 /**
  * Barre latérale : les terminaux de tous les serveurs, puis les serveurs. Sous chaque
- * serveur : ses terminaux, ta session, puis celles des agents.
+ * serveur, déplié par son chevron : ses terminaux, ta session, puis celles des agents.
+ * Un clic sur la ligne d'un serveur ouvre son onglet sans le déplier.
  */
-export function Sidebar({ servers, selectedId, selectedSessionId, terminalsView, terminals, onSelect, onSelectSession, onOpenTerminals, onAdd, onSettings }: Props) {
-  const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set())
+export function Sidebar({ width, onResize, servers, selectedId, selectedSessionId, terminalsView, terminals, onSelect, onSelectSession, onOpenTerminals, onAdd, onSettings }: Props) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
 
   function toggle(id: string) {
-    const next = new Set(toggled)
+    const next = new Set(expanded)
     if (next.has(id)) next.delete(id)
     else next.add(id)
-    setToggled(next)
+    setExpanded(next)
   }
 
   return (
@@ -59,7 +99,7 @@ export function Sidebar({ servers, selectedId, selectedSessionId, terminalsView,
           const selected = terminalsView === null && server.id === selectedId
           const terminalsSelected = terminalsView?.serverId === server.id
           const terminalCount = terminals.filter((t) => t.serverId === server.id).length
-          const open = (server.id === selectedId) !== toggled.has(server.id)
+          const open = expanded.has(server.id)
           const Chevron = open ? ChevronDown : ChevronRight
           return (
             <div key={server.id} className="server-group">
@@ -103,6 +143,7 @@ export function Sidebar({ servers, selectedId, selectedSessionId, terminalsView,
           )
         })}
       </div>
+      <ResizeHandle width={width} onResize={onResize} />
       <div className="sidebar-foot">
         <button className="btn btn-secondary btn-block" onClick={onAdd}>
           <Plus size={18} />

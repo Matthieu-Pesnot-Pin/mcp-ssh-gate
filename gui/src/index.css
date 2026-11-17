@@ -108,6 +108,29 @@ p {
   border-right: 1px solid var(--border);
   padding: 24px 12px 24px;
   min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  touch-action: none;
+}
+
+.sidebar-resizer:hover,
+body.resizing .sidebar-resizer {
+  background: linear-gradient(to right, transparent 3px, var(--accent-soft) 3px, var(--accent-soft) 5px, transparent 5px);
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .brand {

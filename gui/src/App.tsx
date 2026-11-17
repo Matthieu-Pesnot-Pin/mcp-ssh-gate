@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CircleX, Server, X } from 'lucide-react'
 import { DEFAULT_LINE_BREAK_MODE, type ServerView } from '@shared/model'
 import { LineBreakContext } from './components/CommandText'
 import { api } from './api'
 import { usePolling } from './usePolling'
+import { readLastViews, useSidebarWidth, writeLastViews, type LastView } from './prefs'
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
 import { TerminalsScreen } from './components/TerminalsScreen'
@@ -44,6 +45,17 @@ function sessionHash(serverId: string, sessionId: string | null): string {
   return `#/${encodeURIComponent(serverId)}${sessionId ? `/${encodeURIComponent(sessionId)}` : ''}`
 }
 
+/**
+ * Session ouverte quand aucun onglet n'a été choisi dans le serveur : celle qui a une
+ * demande en attente, sinon la session d'agent ouverte le plus récemment, sinon « Vous ».
+ */
+function defaultSessionId(server: ServerView): string | null {
+  const pending = server.sessions.find((s) => s.pendingCount > 0)
+  if (pending) return pending.id
+  const agents = server.sessions.filter((s) => s.id !== null)
+  return agents.length ? agents[agents.length - 1].id : null
+}
+
 export default function App() {
   const state = usePolling('state', api.state, 2000)
   const terminals = usePolling('terminals', api.terminals, 2500)
@@ -51,6 +63,8 @@ export default function App() {
   const [terminalsView, setTerminalsView] = useState<TerminalsView | null>(terminalsFromHash)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
+  const lastViews = useRef<Record<string, LastView>>(readLastViews())
 
   useEffect(() => {
     const onHash = () => {
@@ -77,7 +91,7 @@ export default function App() {
   const terminalList = terminals.data?.terminals ?? []
   const firstPending = servers.find((s) => s.pendingCount > 0)
   const selected = servers.find((s) => s.id === selection?.serverId) ?? firstPending ?? servers[0] ?? null
-  const wantedSessionId = selected && selected.id === selection?.serverId ? selection.sessionId : selected?.sessions.find((s) => s.pendingCount > 0)?.id ?? null
+  const wantedSessionId = selected && selected.id === selection?.serverId ? selection.sessionId : selected ? defaultSessionId(selected) : null
   const selectedSession = selected?.sessions.find((s) => s.id === wantedSessionId) ?? null
   const sessionGone = !!selected && !!wantedSessionId && !selectedSession
   const terminalsServer = terminalsView?.serverId ? servers.find((s) => s.id === terminalsView.serverId) ?? null : null
@@ -90,6 +104,33 @@ export default function App() {
   useEffect(() => {
     if (terminalsServerGone) window.location.hash = TERMINALS_HASH
   }, [terminalsServerGone])
+
+  const visitedServerId = terminalsView ? terminalsView.serverId : selection?.serverId ?? null
+  const visitedSessionId = terminalsView ? null : selection?.sessionId ?? null
+  useEffect(() => {
+    if (!visitedServerId) return
+    const view: LastView = terminalsView ? { kind: 'terminals' } : { kind: 'session', sessionId: visitedSessionId }
+    lastViews.current = { ...lastViews.current, [visitedServerId]: view }
+    writeLastViews(lastViews.current)
+  }, [visitedServerId, visitedSessionId, terminalsView])
+
+  /**
+   * Clic sur un serveur : son dernier onglet ouvert ; à défaut, la session qui a une
+   * demande en attente, puis la session d'agent la plus récente, puis la session « Vous ».
+   */
+  function openServer(id: string) {
+    const server = servers.find((s) => s.id === id)
+    const last = lastViews.current[id]
+    if (last?.kind === 'terminals') {
+      window.location.hash = terminalsHash(id)
+      return
+    }
+    if (last && server?.sessions.some((s) => s.id === last.sessionId)) {
+      select(id, last.sessionId)
+      return
+    }
+    select(id, server ? defaultSessionId(server) : null)
+  }
 
   function select(id: string, sessionId: string | null = null) {
     window.location.hash = sessionHash(id, sessionId)
@@ -112,15 +153,17 @@ export default function App() {
 
   return (
     <LineBreakContext.Provider value={settings?.lineBreaks ?? DEFAULT_LINE_BREAK_MODE}>
-    <div className="app">
+    <div className="app" style={{ gridTemplateColumns: `${sidebarWidth}px 1fr` }}>
       <Sidebar
+        width={sidebarWidth}
+        onResize={setSidebarWidth}
         servers={servers}
         selectedId={terminalsView ? terminalsView.serverId : selected?.id ?? null}
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={select}
         terminalsView={terminalsView}
         terminals={terminalList}
-        onSelect={select}
+        onSelect={openServer}
         onOpenTerminals={(serverId) => (window.location.hash = terminalsHash(serverId))}
         onAdd={() => setDialog({ kind: 'add' })}
         onSettings={() => setDialog({ kind: 'settings' })}
