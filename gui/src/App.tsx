@@ -115,12 +115,19 @@ export default function App() {
   }, [visitedServerId, visitedSessionId, terminalsView])
 
   /**
-   * Clic sur un serveur : son dernier onglet ouvert ; à défaut, la session qui a une
-   * demande en attente, puis la session d'agent la plus récente, puis la session « Vous ».
+   * Clic sur un serveur : une session qui a une demande en attente (le dernier onglet
+   * ouvert s'il en fait partie) ; sinon le dernier onglet ouvert ; sinon la session
+   * d'agent la plus récente, puis la session « Vous ».
    */
   function openServer(id: string) {
     const server = servers.find((s) => s.id === id)
     const last = lastViews.current[id]
+    const pending = server?.sessions.filter((s) => s.pendingCount > 0) ?? []
+    if (pending.length > 0) {
+      const lastPending = last?.kind === 'session' ? pending.find((s) => s.id === last.sessionId) : undefined
+      select(id, (lastPending ?? pending[0]).id)
+      return
+    }
     if (last?.kind === 'terminals') {
       window.location.hash = terminalsHash(id)
       return
