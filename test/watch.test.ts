@@ -212,24 +212,33 @@ test("event lines describe refusals", () => {
   assert.match(formatEvent(refused), /request \S+ refused by the user: pas en prod aujourd'hui —/);
 });
 
-test("sessions: the first open_session creates the agent id, later ones reuse it, and close_session withdraws pending requests silently", async () => {
+test("sessions: submit_commands opens a session when given a server, the first one creates the agent id, later ones reuse it, and close_session withdraws pending requests silently", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-sessions-"));
   const ctx = toolContext(dataDir);
   ctx.servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
   ctx.servers.create({ name: "db", host: "10.0.0.2", port: 22, username: "deploy" });
   const read = async (name: string, args: unknown) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
+  const submit = (args: object) => read("submit_commands", { commands: ["ls"], explanation: "list", ...args });
 
-  assert.match(await read("open_session", { server: "web", name: "deploy" }), /has never been tested/);
+  assert.match(await submit({ server: "web", session_name: "deploy" }), /has never been tested/);
+  assert.deepEqual(ctx.sessions.listOpen(), []);
   ctx.servers.setFingerprint("web", "SHA256:abc");
   ctx.servers.setFingerprint("db", "SHA256:def");
-  const opened = await read("open_session", { server: "web", name: "  deploy   shop " });
-  const id = /Session (sh_[0-9a-f]{8}) opened on web as "deploy shop"/.exec(opened)?.[1];
+  assert.match(await submit({}), /Give session_id to run in an open session, or server and session_name/);
+  assert.match(await submit({ server: "web" }), /Give session_id to run in an open session, or server and session_name/);
+
+  const opened = await submit({ server: "web", session_name: "  deploy   shop " });
+  const id = /Session (sh_[0-9a-f]{8}) was opened on web as "deploy shop"/.exec(opened)?.[1];
   const agentId = /Your agent id is (ag_[0-9a-f]{8})\./.exec(opened)?.[1];
   assert.ok(id && agentId, opened);
+  assert.match(opened, new RegExp(`Request \\S+ submitted to session ${id} on web`));
   assert.match(await read("list_servers", {}), new RegExp(`Open agent sessions: ${id} "deploy shop"`));
+  const [pending] = ctx.requests.listOpen();
+  assert.equal(pending.sessionId, id);
 
-  assert.match(await read("open_session", { server: "db", name: "x", agent_id: "ag_00000000" }), /Unknown agent id/);
-  const second = await read("open_session", { server: "db", name: "migration", agent_id: agentId });
+  assert.match(await submit({ server: "db", session_name: "x", agent_id: "ag_00000000" }), /Unknown agent id/);
+  assert.match(await submit({ session_id: id, server: "db" }), /not both/);
+  const second = await submit({ server: "db", session_name: "migration", agent_id: agentId });
   assert.match(second, new RegExp(`tied to your agent id ${agentId}: the watcher you armed`));
   const secondId = /Session (sh_[0-9a-f]{8})/.exec(second)![1];
   assert.deepEqual(ctx.sessions.listForAgent(agentId!).map((s) => s.id).sort(), [id, secondId].sort());
@@ -237,11 +246,13 @@ test("sessions: the first open_session creates the agent id, later ones reuse it
   assert.match(await read("enable_notifications", {}), /agent_id/);
   assert.match(await read("enable_notifications", { agent_id: agentId }), new RegExp(`Notifications enabled for agent ${agentId}[\\s\\S]*command:     watch ${agentId}`));
 
-  assert.match(await read("submit_commands", { session_id: "sh_00000000", commands: ["ls"], explanation: "x" }), /Unknown session/);
-  assert.match(await read("submit_commands", { session_id: id, commands: ["ls"], explanation: "list" }), /submitted to session sh_[0-9a-f]{8} on web/);
-  const [pending] = ctx.requests.listOpen();
-  assert.equal(pending.sessionId, id);
+  assert.match(await submit({ session_id: "sh_00000000" }), /Unknown session/);
+  const again = await submit({ session_id: id });
+  assert.match(again, new RegExp(`submitted to session ${id} on web`));
+  assert.doesNotMatch(again, /was opened/);
+  assert.equal(ctx.sessions.listForAgent(agentId!).length, 2);
 
+  const sessionRequests = () => ctx.requests.listOpen().filter((request) => request.sessionId === id);
   ctx.requests.update(pending.id, (draft) => {
     draft.status = "running";
   });
@@ -252,8 +263,9 @@ test("sessions: the first open_session creates the agent id, later ones reuse it
 
   assert.match(await read("close_session", { session_id: id }), /closed\. Your watcher keeps running for your other sessions/);
   assert.equal(ctx.requests.get(pending.id).status, "cancelled");
+  assert.deepEqual(sessionRequests(), []);
   assert.deepEqual(ctx.events(agentId!).since(0), []);
-  assert.match(await read("submit_commands", { session_id: id, commands: ["ls"], explanation: "again" }), /was closed by an agent/);
+  assert.match(await submit({ session_id: id }), /was closed by an agent/);
   assert.match(await read("list_servers", {}), new RegExp(`Open agent sessions: ${secondId} "migration"`));
 });
 

@@ -189,7 +189,7 @@ function origin(event: GateEvent): string {
 function formatClosed(event: SessionClosed): string {
   return (
     `${origin(event)} — the user closed your session "${oneLine(event.name, 60)}": its shell is gone and its pending requests were withdrawn. ` +
-    `Open a new session with open_session, passing your agent_id, if you still need to run commands on ${event.serverId}.`
+    `Open a new session with submit_commands (server, session_name and your agent_id) if you still need to run commands on ${event.serverId}.`
   );
 }
 

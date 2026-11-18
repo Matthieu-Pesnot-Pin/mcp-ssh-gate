@@ -5,8 +5,7 @@ Un agent propose des commandes à exécuter sur un serveur de production ; tu le
 L'agent ne détient aucun accès au serveur. La paire de clés SSH est générée par le MCP à l'ajout d'un serveur ; tu poses la clé publique sur le serveur dans un fichier qui lui est propre, la clé privée reste chiffrée dans le MCP et n'est jamais affichée.
 
 ```
-Agent ──open_session──▶ session (son propre shell)
-      ──submit_commands──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
+Agent ──submit_commands──▶  session (son propre shell, ouverte au premier envoi)  ──▶  file d'attente  ──▶  Interface : tu valides, modifies ou refuses
   ▲                                                        │
   └── notification + get_result ◀── sortie, code de retour ◀── SSH ─┘  (shell bash persistant de la session)
 ```
@@ -159,9 +158,8 @@ Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un 
 |---|---|
 | `list_servers` | Serveurs configurés, si leur connexion a été testée, les sessions d'agent ouvertes et leurs notes. |
 | `update_server_notes` | Complète (`append`, par défaut) ou réécrit (`replace`) les notes d'un serveur. |
-| `open_session` | Ouvre une session sur un serveur testé, sous un nom court que tu vois dans l'interface (40 caractères au plus). Renvoie un `session_id` (`sh_…`). Au premier appel de la conversation, sans `agent_id`, crée aussi l'identifiant de l'agent (`ag_…`) ; les appels suivants le reprennent pour rattacher leurs sessions au même veilleur. |
 | `close_session` | Ferme une session : son shell est fermé et ses demandes en attente sont retirées. Refusé tant qu'une demande de la session s'exécute. Son journal reste consultable dans l'interface pendant 36 h. |
-| `submit_commands` | Soumet 1 à 20 commandes avec une explication, dans la session donnée par `session_id`. Rien ne s'exécute avant ta validation, sauf si la [liste blanche](#liste-blanche) du serveur, en mode Active, couvre toutes les commandes. Renvoie un `request_id`. |
+| `submit_commands` | Soumet 1 à 20 commandes avec une explication, dans la session donnée par `session_id`. Sans `session_id`, ouvre d'abord une session sur le serveur `server`, sous le nom court `session_name` que tu vois dans l'interface (40 caractères au plus), et renvoie son `session_id` (`sh_…`) avec la demande. À la première session de la conversation, sans `agent_id`, crée aussi l'identifiant de l'agent (`ag_…`) ; les sessions suivantes le reprennent pour être rattachées au même veilleur. Rien ne s'exécute avant ta validation, sauf si la [liste blanche](#liste-blanche) du serveur, en mode Active, couvre toutes les commandes. Renvoie un `request_id`. |
 | `get_result` | Renvoie aussitôt le résultat d'une demande terminée : le refus et son motif, ou chaque commande avec son code de retour et sa sortie, et ta note. Pour une demande pas encore terminée, renvoie son état, sans attendre. S'utilise toujours avec les notifications activées : c'est la notification qui dit quand l'appeler. |
 | `enable_notifications` | Active, une fois par conversation et avec l'`agent_id`, les notifications de toutes les sessions de l'agent (fin de demande, commande que tu lui envoies, demande d'explication, fermeture d'une session par toi) et donne l'appel Monitor exact à lancer, en local comme derrière mcp-http-gateway. |
 | `answer_question` | Répond à une demande d'explication posée depuis l'interface sur une instruction ; la réponse s'affiche sous l'instruction. |
@@ -176,7 +174,7 @@ L'agent ne bloque jamais sur une demande : il continue à travailler et est pré
 
 Les notifications sont celles d'**un agent** : chaque agent ne reçoit que ce qui se passe dans ses sessions, quel que soit le nombre d'agents branchés sur le même SSH Gate.
 
-Le premier `open_session` d'une conversation, sans `agent_id`, crée l'identifiant de l'agent (`ag_…`) et le renvoie avec la session. L'agent appelle alors `enable_notifications` avec cet `agent_id`, une seule fois, puis lance l'appel Monitor que l'outil lui renvoie. Il passe ensuite le même `agent_id` à chaque nouvel `open_session` : la session est rattachée à son identité, et le veilleur déjà armé l'annonce sans rien relancer. Ce veilleur tourne sur la machine de l'agent et écrit une ligne par événement, qui nomme le serveur et la session ; chaque ligne réveille l'agent, même inactif :
+Le premier `submit_commands` d'une conversation ouvre une session et, sans `agent_id`, crée l'identifiant de l'agent (`ag_…`), qu'il renvoie avec la session. L'agent appelle alors `enable_notifications` avec cet `agent_id`, une seule fois, puis lance l'appel Monitor que l'outil lui renvoie. Il passe ensuite le même `agent_id` à chaque `submit_commands` qui ouvre une nouvelle session : la session est rattachée à son identité, et le veilleur déjà armé l'annonce sans rien relancer. Ce veilleur tourne sur la machine de l'agent et écrit une ligne par événement, qui nomme le serveur et la session ; chaque ligne réveille l'agent, même inactif :
 
 ```
 [ssh-gate] pxp-dev · session sh_7f3a91c2 — request 0mwavl7lb-419091 completed: 4/4 command(s) succeeded — read it with get_result, request_id 0mwavl7lb-419091
@@ -192,7 +190,7 @@ L'agent lit ensuite le résultat avec `get_result`.
 2. Le relais dépose le fichier de veille sur la machine de l'agent et lui rend l'appel Monitor `npx -y @imenam/mcp-http-gateway --watch <fichier>`.
 3. Ce veilleur appelle en boucle `wait_for_notifications` à travers le gateway. Chaque appel attend au plus 50 s une demande terminée, et renvoie les lignes et le nouveau point de reprise dans `_meta["gateway/events"]`.
 
-`wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway ; c'est l'`agent_id` passé à chaque appel qui désigne les sessions à suivre. L'identifiant est donné par `open_session` et non par `enable_notifications`, parce que le relais remplace la réponse de ce dernier par ses propres consignes.
+`wait_for_notifications` est réservé au veilleur : l'agent ne l'appelle pas. Derrière un gateway, un seul processus SSH Gate sert tous les agents de ce gateway ; c'est l'`agent_id` passé à chaque appel qui désigne les sessions à suivre. L'identifiant est donné par `submit_commands` et non par `enable_notifications`, parce que le relais remplace la réponse de ce dernier par ses propres consignes.
 
 Dans les deux modes, un point de reprise évite les doublons. L'hôte arrête un Monitor au bout de 30 minutes ; une demande terminée pendant que le veilleur était arrêté est annoncée dès qu'il est relancé. Les demandes que l'agent a retirées ne sont pas annoncées. Une commande que tu tapes toi-même dans la session d'un agent ne l'est que si tu cliques sur **Envoyer à l'agent** sous son résultat : elle est alors annoncée à cet agent seul. Une commande tapée dans ta session « Vous » n'est annoncée à personne.
 
@@ -205,7 +203,7 @@ Une **demande d'explication** posée depuis l'interface est annoncée à l'agent
 Quand tu fermes une session depuis l'interface, son agent en est prévenu ; son veilleur continue de suivre ses autres sessions :
 
 ```
-[ssh-gate] pxp-dev · session sh_7f3a91c2 — the user closed your session "deploy shop": its shell is gone and its pending requests were withdrawn. Open a new session with open_session, passing your agent_id, if you still need to run commands on pxp-dev.
+[ssh-gate] pxp-dev · session sh_7f3a91c2 — the user closed your session "deploy shop": its shell is gone and its pending requests were withdrawn. Open a new session with submit_commands (server, session_name and your agent_id) if you still need to run commands on pxp-dev.
 ```
 
 ```

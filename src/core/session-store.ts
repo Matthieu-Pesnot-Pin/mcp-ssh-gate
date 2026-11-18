@@ -35,7 +35,7 @@ export class SessionStore {
     const value = String(id ?? "").trim();
     if (!AGENT_ID_PATTERN.test(value)) throw new GateError(`Invalid agent id "${id}".`);
     const file = path.join(this.agentsRoot, `${value}.json`);
-    if (!fs.existsSync(file)) throw new GateError(`Unknown agent id "${id}": use the agent_id returned by your first open_session.`);
+    if (!fs.existsSync(file)) throw new GateError(`Unknown agent id "${id}": use the agent_id returned when you opened your first session.`);
     return readJson<AgentIdentity>(file);
   }
 
@@ -69,7 +69,7 @@ export class SessionStore {
     const session = this.get(id);
     if (session.closedAt) {
       const by = session.closedBy === "user" ? "the user" : "an agent";
-      throw new GateError(`Session ${session.id} was closed by ${by} on ${session.closedAt}. Open a new one with open_session.`);
+      throw new GateError(`Session ${session.id} was closed by ${by} on ${session.closedAt}. Open a new one by calling submit_commands with server and session_name.`);
     }
     return session;
   }

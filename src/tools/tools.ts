@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { MAX_ANSWER_LENGTH, MAX_COMMANDS_PER_REQUEST, MAX_SESSION_NAME_LENGTH, isFinalStatus } from "../../shared/model.js";
+import { MAX_ANSWER_LENGTH, MAX_COMMANDS_PER_REQUEST, MAX_SESSION_NAME_LENGTH, isFinalStatus, type AgentSession } from "../../shared/model.js";
 import { GateError } from "../core/errors.js";
 import type { RequestStore } from "../core/request-store.js";
 import type { ServerStore, StoredServer } from "../core/server-store.js";
@@ -34,27 +34,10 @@ const RESULT_OUTPUT_PER_COMMAND = 20_000;
 const HISTORY_OUTPUT_PER_COMMAND = 2_000;
 const POLL_MS = 1000;
 
-const SESSION_ID_PROPERTY = { type: "string", description: "Id of your session, as returned by open_session." };
-const AGENT_ID_PROPERTY = { type: "string", description: "Your agent id, returned by your first open_session." };
+const SESSION_ID_PROPERTY = { type: "string", description: "Id of your session, as returned by the submit_commands call that opened it." };
+const AGENT_ID_PROPERTY = { type: "string", description: "Your agent id, returned by the submit_commands call that opened your first session." };
 
 export const TOOL_DEFINITIONS: Tool[] = [
-  {
-    name: "open_session",
-    description:
-      "Open your own session on a server before submitting commands: it gets its own persistent bash shell (cd and export only carry over inside the session), and only you are notified of what happens in it. " +
-      "Returns a session_id to pass to submit_commands. Open one session per server you work on and keep it for the whole task; the user sees it in the GUI under the name you give. " +
-      "Your sessions are tied to your agent id, so a single notification watcher covers all of them: on your first open_session, omit agent_id — a new agent id is created and returned, then call enable_notifications with it once. " +
-      "Pass that same agent_id to every later open_session of this conversation: its events reach the watcher you already armed. Close a session with close_session when its task is done.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        server: { type: "string", description: "Server id or name, as returned by list_servers." },
-        name: { type: "string", maxLength: MAX_SESSION_NAME_LENGTH, description: `Short label of what you are doing, shown to the user (at most ${MAX_SESSION_NAME_LENGTH} characters), e.g. "deploy shop".` },
-        agent_id: { type: "string", description: "Your agent id, returned by your first open_session. Omit it only on the first open_session of this conversation." },
-      },
-      required: ["server", "name"],
-    },
-  },
   {
     name: "close_session",
     description:
@@ -70,7 +53,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
     description:
       "Get notified of what happens in all your sessions, including the ones you open later with the same agent_id: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in one of your sessions, the user asks you to explain a command, or the user closes one of your sessions. " +
       "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
-      "Call it once per conversation, right after your first open_session — never once per session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+      "Call it once per conversation, right after the submit_commands call that opened your first session — never once per session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {
       type: "object",
       properties: {
@@ -130,7 +113,12 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "submit_commands",
     description:
-      `Submit shell commands to run in your session, on the server it was opened on (open_session). Read the server notes from list_servers first. Nothing runs until the user approves them in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
+      `Submit shell commands to run in one of your sessions on a server. Read the server notes from list_servers first. ` +
+      `To run in a new session, omit session_id and give server and session_name: the session is opened with this request and its session_id is returned. ` +
+      `Pass that session_id to every later submit_commands of the same task: each session has its own persistent bash shell, and only you are notified of what happens in it. Close it with close_session when its task is done. ` +
+      `Your sessions are tied to your agent id, so a single notification watcher covers all of them: when you open your first session, omit agent_id — a new agent id is created and returned, then call enable_notifications with it once. ` +
+      `Pass that same agent_id whenever you open another session in this conversation: its events reach the watcher you already armed. ` +
+      `Nothing runs until the user approves the commands in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
       `Exception: when the user enabled a whitelist on that server and it covers every part of every command (each part between &&, ||, ;, | or &), the request runs right away without waiting. ` +
       `Variables, $( ), redirections to files, bash -c, xargs and the like are never covered: keep commands plain when you can. ` +
       `Approved commands run in order in the persistent bash shell of your session (cd and export carry over between commands and between your requests, never to other sessions), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
@@ -139,7 +127,17 @@ export const TOOL_DEFINITIONS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        session_id: SESSION_ID_PROPERTY,
+        session_id: { type: "string", description: "Id of an open session of yours, as returned when it was opened. Omit it to open a new session, with server and session_name." },
+        server: { type: "string", description: "Server id or name, as returned by list_servers. Only to open a new session, without session_id." },
+        session_name: {
+          type: "string",
+          maxLength: MAX_SESSION_NAME_LENGTH,
+          description: `Only to open a new session, without session_id: short label of what you are doing, shown to the user (at most ${MAX_SESSION_NAME_LENGTH} characters), e.g. "deploy shop".`,
+        },
+        agent_id: {
+          type: "string",
+          description: "Only to open a new session, without session_id: your agent id, returned when you opened your first session. Omit it only when opening the first session of this conversation.",
+        },
         commands: {
           type: "array",
           items: { type: "string" },
@@ -149,7 +147,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
         },
         explanation: { type: "string", description: "Why these commands are needed and what they do, shown to the user above the commands." },
       },
-      required: ["session_id", "commands", "explanation"],
+      required: ["commands", "explanation"],
     },
   },
   {
@@ -212,10 +210,12 @@ export const TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
-const OpenSessionArgs = z.object({ server: z.string().min(1), name: z.string(), agent_id: z.string().min(1).optional() });
 const SessionArgs = z.object({ session_id: z.string().min(1) });
 const SubmitArgs = z.object({
-  session_id: z.string().min(1),
+  session_id: z.string().min(1).optional(),
+  server: z.string().min(1).optional(),
+  session_name: z.string().optional(),
+  agent_id: z.string().min(1).optional(),
   commands: z.array(z.string()).min(1).max(MAX_COMMANDS_PER_REQUEST),
   explanation: z.string().trim().min(1, "explanation must not be empty"),
 });
@@ -295,29 +295,6 @@ function assertUsable(server: StoredServer): void {
   }
 }
 
-function openSession(ctx: ToolContext, args: unknown): CallToolResult {
-  const { server: serverRef, name, agent_id } = parse(OpenSessionArgs, args);
-  const server = ctx.servers.get(serverRef);
-  assertUsable(server);
-  const agent = agent_id === undefined ? ctx.sessions.createAgent() : ctx.sessions.getAgent(agent_id);
-  const session = ctx.sessions.open(server.id, name, agent.id);
-  ctx.ensureGui();
-  const watch =
-    agent_id === undefined
-      ? [
-          `Your agent id is ${agent.id}. Call enable_notifications now with agent_id ${agent.id}: that single watcher covers all your sessions.`,
-          `Pass agent_id ${agent.id} to every later open_session of this conversation, so their events reach the same watcher; omitting it creates another agent id that no watcher of yours follows.`,
-        ]
-      : [`It is tied to your agent id ${agent.id}: the watcher you armed with enable_notifications already covers it, do not arm another one.`];
-  return text(
-    [
-      `Session ${session.id} opened on ${server.id} as "${session.name}". Pass session_id ${session.id} to submit_commands.`,
-      ...watch,
-      "Its shell is your own: cd and export carry over between your requests and never leak to other sessions. Close it with close_session when its task is done.",
-    ].join("\n")
-  );
-}
-
 function closeSession(ctx: ToolContext, args: unknown): CallToolResult {
   const { session_id } = parse(SessionArgs, args);
   const session = ctx.sessions.close(session_id, "agent", ctx.requests);
@@ -334,20 +311,61 @@ function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
   return text(`Notes of ${saved.id} saved (${saved.notes.length} characters). The user sees them in the GUI.`);
 }
 
-function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
-  const { session_id, commands, explanation } = parse(SubmitArgs, args);
-  const session = ctx.sessions.getOpen(session_id);
-  const server = ctx.servers.get(session.serverId);
+type ResolvedSession =
+  | { session: AgentSession; server: StoredServer; opened: false }
+  | { session: AgentSession; server: StoredServer; opened: true; newAgent: boolean };
+
+/** Session de la demande : celle de `session_id`, ou une nouvelle ouverte sur `server` sous `session_name`. */
+function resolveSession(ctx: ToolContext, input: z.infer<typeof SubmitArgs>): ResolvedSession {
+  if (input.session_id !== undefined) {
+    if (input.server !== undefined || input.session_name !== undefined || input.agent_id !== undefined) {
+      throw new GateError("Give either session_id, to run in an open session, or server and session_name, to open a new one — not both.");
+    }
+    const session = ctx.sessions.getOpen(input.session_id);
+    const server = ctx.servers.get(session.serverId);
+    assertUsable(server);
+    return { session, server, opened: false };
+  }
+  if (input.server === undefined || input.session_name === undefined) {
+    throw new GateError("Give session_id to run in an open session, or server and session_name to open a new one.");
+  }
+  const server = ctx.servers.get(input.server);
   assertUsable(server);
-  const request = ctx.requests.create({ serverId: server.id, source: "agent", sessionId: session.id, explanation, commands });
+  const agent = input.agent_id === undefined ? null : ctx.sessions.getAgent(input.agent_id);
+  const session = ctx.sessions.open(server.id, input.session_name, agent?.id ?? ctx.sessions.createAgent().id);
+  return { session, server, opened: true, newAgent: agent === null };
+}
+
+function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
+  const input = parse(SubmitArgs, args);
+  const resolved = resolveSession(ctx, input);
+  const { session, server } = resolved;
+  const request = ctx.requests.create({ serverId: server.id, source: "agent", sessionId: session.id, explanation: input.explanation, commands: input.commands });
   ctx.ensureGui();
   const url = ctx.guiUrl();
-  const next =
-    `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
-    `If you have not called enable_notifications with your agent_id ${session.agentId} in this conversation, do it now.`;
-  return text(
-    `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It runs once the user approves it${url ? ` in the GUI (${url})` : " in the GUI"}, or right away if their whitelist covers it.\n${next}`
-  );
+  const lines = [
+    `Request ${request.id} submitted to session ${session.id} on ${server.id} with ${request.commands.length} command(s). It runs once the user approves it${url ? ` in the GUI (${url})` : " in the GUI"}, or right away if their whitelist covers it.`,
+  ];
+  if (resolved.opened) {
+    lines.push(
+      `Session ${session.id} was opened on ${server.id} as "${session.name}". Pass session_id ${session.id} to your next submit_commands in it: its shell is your own, cd and export carry over between your requests and never leak to other sessions. Close it with close_session when its task is done.`
+    );
+  }
+  if (resolved.opened && resolved.newAgent) {
+    lines.push(
+      `Your agent id is ${session.agentId}. Call enable_notifications now with agent_id ${session.agentId}: that single watcher covers all your sessions and tells you when this request is finished; then read the outcome with get_result.`,
+      `Pass agent_id ${session.agentId} whenever you open another session in this conversation, so its events reach the same watcher; omitting it creates another agent id that no watcher of yours follows.`
+    );
+  } else {
+    if (resolved.opened) {
+      lines.push(`It is tied to your agent id ${session.agentId}: the watcher you armed with enable_notifications already covers it, do not arm another one.`);
+    }
+    lines.push(
+      `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
+        `If you have not called enable_notifications with your agent_id ${session.agentId} in this conversation, do it now.`
+    );
+  }
+  return text(lines.join("\n"));
 }
 
 /**
@@ -491,8 +509,6 @@ function getHistory(ctx: ToolContext, args: unknown): CallToolResult {
 export async function callTool(ctx: ToolContext, name: string, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   try {
     switch (name) {
-      case "open_session":
-        return openSession(ctx, args);
       case "close_session":
         return closeSession(ctx, args);
       case "enable_notifications":
