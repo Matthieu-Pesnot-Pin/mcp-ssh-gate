@@ -260,6 +260,42 @@ body.resizing {
   text-overflow: ellipsis;
 }
 
+/* Sessions fermées d'un serveur : repliables sous un en-tête, décalées et atténuées. */
+.closed-toggle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+}
+
+.closed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 12px;
+}
+
+.session-row.closed {
+  color: var(--faint);
+}
+
+.session-row.closed.selected {
+  color: var(--text);
+}
+
+.session-row.closed.selected .session-icon {
+  color: var(--accent-soft);
+}
+
+.closed-age {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--faint);
+}
+
+.session-row.selected .closed-age {
+  color: var(--muted);
+}
+
 .badge-sm {
   min-width: 20px;
   height: 16px;
@@ -1096,6 +1132,20 @@ body.resizing {
 .prompt input::placeholder {
   font-family: var(--font-sans);
   color: var(--faint);
+}
+
+/* Bas d'écran d'une session fermée : aucune saisie. */
+.prompt.readonly {
+  gap: 12px;
+  background: var(--panel);
+  border-color: var(--border);
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.prompt-readonly-label {
+  margin-right: 12px;
+  color: var(--muted);
 }
 
 .prompt-sign {

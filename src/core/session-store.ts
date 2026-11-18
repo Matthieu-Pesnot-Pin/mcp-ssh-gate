@@ -81,6 +81,13 @@ export class SessionStore {
       .sort((a, b) => a.openedAt.localeCompare(b.openedAt));
   }
 
+  /** Sessions fermées d'un serveur, les plus récemment fermées d'abord. */
+  listClosed(serverId: string): AgentSession[] {
+    return this.all()
+      .filter((session): session is AgentSession & { closedAt: string } => !!session.closedAt && session.serverId === serverId)
+      .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
+  }
+
   /** Sessions ouvertes par un agent, fermées comprises. */
   listForAgent(agentId: string): AgentSession[] {
     return this.all().filter((session) => session.agentId === agentId);
@@ -117,6 +124,19 @@ export class SessionStore {
       writeJsonAtomic(file, draft);
       return draft;
     });
+  }
+
+  /**
+   * Efface les sessions fermées avant `closedBefore` (millisecondes), avec les demandes
+   * de leur journal. Renvoie les sessions effacées.
+   */
+  purgeClosed(closedBefore: number, requests: RequestStore): AgentSession[] {
+    const expired = this.all().filter((session) => session.closedAt && Date.parse(session.closedAt) < closedBefore);
+    for (const session of expired) {
+      requests.deleteForSession(session.serverId, session.id);
+      fs.rmSync(this.fileOf(session.id), { force: true });
+    }
+    return expired;
   }
 
   deleteServer(serverId: string): void {

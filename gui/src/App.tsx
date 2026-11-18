@@ -107,7 +107,7 @@ export default function App() {
   const firstPending = servers.find((s) => s.pendingCount > 0)
   const selected = servers.find((s) => s.id === selection?.serverId) ?? firstPending ?? servers[0] ?? null
   const wantedSessionId = selected && selected.id === selection?.serverId ? selection.sessionId : selected ? defaultSessionId(selected) : null
-  const selectedSession = selected?.sessions.find((s) => s.id === wantedSessionId) ?? null
+  const selectedSession = [...(selected?.sessions ?? []), ...(selected?.closedSessions ?? [])].find((s) => s.id === wantedSessionId) ?? null
   const sessionGone = !!selected && !!wantedSessionId && !selectedSession
   const terminalsServer = terminalsView?.serverId ? servers.find((s) => s.id === terminalsView.serverId) ?? null : null
   const terminalsServerGone = !!state.data && !!terminalsView?.serverId && !terminalsServer
@@ -147,7 +147,7 @@ export default function App() {
       window.location.hash = terminalsHash(id)
       return
     }
-    if (last && server?.sessions.some((s) => s.id === last.sessionId)) {
+    if (last && (server?.sessions.some((s) => s.id === last.sessionId) || server?.closedSessions.some((s) => s.id === last.sessionId))) {
       select(id, last.sessionId)
       return
     }

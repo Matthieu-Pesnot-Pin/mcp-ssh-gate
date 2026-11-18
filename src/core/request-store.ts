@@ -149,6 +149,13 @@ export class RequestStore {
     });
   }
 
+  /** Efface les demandes d'une session d'agent. */
+  deleteForSession(serverId: string, sessionId: string): void {
+    for (const request of this.listForServer(serverId)) {
+      if (request.sessionId === sessionId) fs.rmSync(this.fileOf(serverId, request.id), { force: true });
+    }
+  }
+
   deleteServer(serverId: string): void {
     fs.rmSync(path.join(this.root, serverId), { recursive: true, force: true });
   }

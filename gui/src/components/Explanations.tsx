@@ -1,8 +1,11 @@
-import { useContext, useMemo, useState, type MouseEvent } from 'react'
+import { createContext, useContext, useMemo, useState, type MouseEvent } from 'react'
 import { LoaderCircle, MessageCircleQuestionMark, Sparkles, X } from 'lucide-react'
 import type { CommandQuestion, GateRequest } from '@shared/model'
 import { api } from '../api'
 import { CommandText, LineBreakContext, commandStatements } from './CommandText'
+
+/** Raison pour laquelle aucune nouvelle question ne peut être posée, affichée sur le bouton Expliquer ; null quand c'est possible. */
+export const ExplainBlockedContext = createContext<string | null>(null)
 
 /** Un clic dans un bouton ou un encadré d'explication ne déplie ni ne replie l'entrée du journal. */
 function stop(event: MouseEvent) {
@@ -64,6 +67,7 @@ interface Props {
  */
 export function ExplainableCommand({ request, commandIndex, onChanged, onError }: Props) {
   const mode = useContext(LineBreakContext)
+  const blocked = useContext(ExplainBlockedContext)
   const command = request.commands[commandIndex].command
   const statements = useMemo(() => commandStatements(command), [command])
   const questions = request.questions.filter((question) => question.commandIndex === commandIndex)
@@ -119,7 +123,8 @@ export function ExplainableCommand({ request, commandIndex, onChanged, onError }
               {!open && (
                 <button
                   className="stmt-explain"
-                  disabled={busy}
+                  disabled={busy || (!question && blocked !== null)}
+                  title={!question && blocked !== null ? blocked : undefined}
                   onClick={(event) => {
                     stop(event)
                     if (question) reveal(question.id)

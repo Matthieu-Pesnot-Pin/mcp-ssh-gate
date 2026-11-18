@@ -134,7 +134,7 @@ test("approved commands run in the persistent shell of their session and stop at
   const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dataDir);
   const sessions = new SessionStore(dataDir);
-  const executor = new Executor(servers, requests, sessions, () => {});
+  const executor = new Executor(servers, requests, sessions, () => {}, () => false);
 
   const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
   const fake = await startFakeSshServer({ key: placeholder.publicKey! });
@@ -224,7 +224,7 @@ test("the whitelist runs covered requests in order, past aliases and functions o
   const requests = new RequestStore(dataDir);
   const sessions = new SessionStore(dataDir);
   const whitelist = new WhitelistStore(dataDir);
-  const executor = new Executor(servers, requests, sessions, () => {});
+  const executor = new Executor(servers, requests, sessions, () => {}, () => false);
   const approver = new AutoApprover(servers, requests, whitelist, executor, () => {});
 
   const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
@@ -281,7 +281,7 @@ test("an interactive terminal streams the shell, replays its output and follows 
   servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
 
   await assert.rejects(terminals.open("local", 80, 24), /Teste la connexion/);
-  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {});
+  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {}, () => false);
   await executor.testConnection("local");
   executor.disconnect("local");
 
@@ -323,7 +323,7 @@ test("the key lives in the dedicated file: restricted at test, rotated, then rev
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-keys-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-home-")).replace(/\\/g, "/");
   const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
-  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {});
+  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {}, () => false);
   const terminals = new TerminalManager(servers, () => {});
   const keys = new KeyService(servers, executor, terminals, () => {});
 
@@ -405,7 +405,7 @@ test("questions: asked on a statement of a command, kept in line when commands a
   const servers = new ServerStore(dir, parseVaultKey(generateVaultKey()));
   const requests = new RequestStore(dir);
   const sessions = new SessionStore(dir);
-  const executor = new Executor(servers, requests, sessions, () => {});
+  const executor = new Executor(servers, requests, sessions, () => {}, () => false);
   const request = requests.create({ serverId: "web", source: "agent", sessionId: sessions.open("web", "check", sessions.createAgent().id).id, explanation: "", commands: ["hostname; uptime", "df -h", "free -m"] });
   const typed = requests.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["uptime"] });
   assert.throws(() => executor.askQuestion(typed.id, 0, "uptime"), /aucun agent ne peut l'expliquer/);

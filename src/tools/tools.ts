@@ -5,7 +5,7 @@ import { GateError } from "../core/errors.js";
 import type { RequestStore } from "../core/request-store.js";
 import type { ServerStore, StoredServer } from "../core/server-store.js";
 import type { SessionStore } from "../core/session-store.js";
-import { MONITOR_TIMEOUT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, type RequestEventScanner } from "../core/watch.js";
+import { MONITOR_TIMEOUT_MS, WATCHER_BEAT_MS, advanceCursor, formatEvent, liveWatcherSince, sleep, writeHandoff, writeWatcherBeat, type RequestEventScanner } from "../core/watch.js";
 import { formatRequest } from "./format.js";
 
 export interface ToolContext {
@@ -420,14 +420,28 @@ function getResult(ctx: ToolContext, args: unknown): CallToolResult {
   return text(`Request ${request.id} is ${state}. Keep working: your notification watcher tells you when it is finished.`);
 }
 
+/** Dernier battement écrit par l'outil d'attente, par agent : début de la veille et instant du battement. */
+const gatewayBeats = new Map<string, { since: string; at: number }>();
+
+/** Battement du veilleur du gateway, au plus un tous les WATCHER_BEAT_MS. */
+function beatGatewayWatcher(ctx: ToolContext, agent: string): void {
+  const last = gatewayBeats.get(agent);
+  if (last && Date.now() - last.at < WATCHER_BEAT_MS) return;
+  const since = last?.since ?? new Date().toISOString();
+  writeWatcherBeat(ctx.dataDir, agent, since);
+  gatewayBeats.set(agent, { since, at: Date.now() });
+}
+
 /** Outil d'attente du veilleur du gateway : une ligne par événement après le curseur. */
 async function waitForNotifications(ctx: ToolContext, args: unknown, signal?: AbortSignal): Promise<CallToolResult> {
   const { agent_id, cursor: rawCursor, timeout_seconds } = parse(NotificationWaitArgs, args);
-  const scanner = ctx.events(ctx.sessions.getAgent(agent_id).id);
+  const agent = ctx.sessions.getAgent(agent_id).id;
+  const scanner = ctx.events(agent);
   let cursor = rawCursor === undefined ? Date.now() : Number(rawCursor);
   const deadline = Date.now() + (timeout_seconds ?? DEFAULT_NOTIFICATION_WAIT_SECONDS) * 1000;
 
   for (;;) {
+    beatGatewayWatcher(ctx, agent);
     const events = scanner.since(cursor);
     if (events.length > 0 || Date.now() >= deadline || signal?.aborted) {
       cursor = advanceCursor(cursor, events);

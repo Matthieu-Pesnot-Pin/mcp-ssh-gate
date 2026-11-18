@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { Ban, Bot, CornerDownLeft, Ellipsis, Folder, KeyRound, NotebookPen, Pencil, Power, RefreshCw, Server, Trash2, Unplug, User } from 'lucide-react'
-import { isReady, type GateRequest, type RequestEvaluation, type SegmentEvaluation, type ServerView, type SessionView } from '@shared/model'
+import { Archive, Ban, Bot, CornerDownLeft, Ellipsis, Folder, KeyRound, Lock, NotebookPen, Pencil, Power, RefreshCw, Server, Trash2, Unplug, User } from 'lucide-react'
+import { CLOSED_SESSION_RETENTION_MS, isReady, type GateRequest, type RequestEvaluation, type SegmentEvaluation, type ServerView, type SessionView } from '@shared/model'
 import { api } from '../api'
-import { ago, plural } from '../format'
+import { ago, plural, within } from '../format'
 import { usePolling } from '../usePolling'
+import { ExplainBlockedContext } from './Explanations'
 import { Journal } from './Journal'
 import { RequestCard, RunCard } from './Cards'
 import { NotesView } from './NotesView'
@@ -212,15 +213,23 @@ function CloseSessionButton({ session, onClosed, onError }: { session: SessionVi
   )
 }
 
+/** Ligne d'infos d'une session fermée : ouverture, fermeture et effacement à venir. */
+function closedMeta(session: SessionView): string {
+  const by = session.closedBy === 'user' ? 'toi' : 'l’agent'
+  return `Ouverte ${ago(session.openedAt!)} · fermée par ${by} ${ago(session.closedAt!)} · effacée ${within(session.purgeAt!)}`
+}
+
 /**
  * Écran d'une session : le bandeau du serveur (commun à toutes ses sessions, avec ses
  * notes), puis la session choisie — son historique, sa demande en attente ou son
- * exécution en cours, et la saisie manuelle dans son shell.
+ * exécution en cours, et la saisie manuelle dans son shell. Une session fermée
+ * s'affiche en lecture seule : son journal, sans saisie.
  */
 export function ServerScreen(props: Props) {
   const { server, session, onChanged, onError, onShowKey, onInstallKey } = props
+  const closed = session.closedAt !== null
   const active = session.busy || session.pendingCount > 0
-  const polled = usePolling(`requests:${server.id}:${session.id ?? ''}`, () => api.requests(server.id, session.id), active ? 1000 : 2500)
+  const polled = usePolling(`requests:${server.id}:${session.id ?? ''}`, () => api.requests(server.id, session.id), active ? 1000 : closed ? 5000 : 2500)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const [notesOpen, setNotesOpen] = useState(false)
@@ -252,6 +261,8 @@ export function ServerScreen(props: Props) {
     onChanged()
   }
 
+  const lastCwd = [...finished].reverse().find((r) => r.cwd)?.cwd ?? null
+  const explainBlocked = closed && !session.agentListening ? 'L’agent de cette session n’est plus connecté' : null
   const tested = isReady(server)
   const isAgent = session.id !== null
   const disabledReason = !server.publicKey
@@ -289,20 +300,28 @@ export function ServerScreen(props: Props) {
                   {isAgent ? <Bot size={12} /> : <User size={12} />}
                   {isAgent ? 'Agent' : 'Ta session'}
                 </span>
+                {closed && (
+                  <span className="chip chip-sm">
+                    <Archive size={12} />
+                    Fermée
+                  </span>
+                )}
               </div>
               <div className="session-meta">
                 <Folder size={13} />
-                <span className="mono">{session.cwd ?? 'shell fermé'}</span>
+                <span className="mono">{closed ? lastCwd ?? '—' : session.cwd ?? 'shell fermé'}</span>
                 <span className="session-meta-sep">·</span>
                 <span>
-                  {isAgent
+                  {closed
+                    ? closedMeta(session)
+                    : isAgent
                     ? `Ouverte par un agent ${ago(session.openedAt!)} · dossier et variables propres à cette session`
                     : 'Tes commandes manuelles ; aucun agent ne les reçoit'}
                 </span>
               </div>
             </div>
             <span className="topbar-spacer" />
-            {isAgent && <CloseSessionButton key={session.id} session={session} onClosed={onChanged} onError={onError} />}
+            {isAgent && !closed && <CloseSessionButton key={session.id} session={session} onClosed={onChanged} onError={onError} />}
           </div>
 
           <div
@@ -313,7 +332,7 @@ export function ServerScreen(props: Props) {
               stickToBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40
             }}
           >
-            {!server.publicKey ? (
+            {closed ? null : !server.publicKey ? (
               <div className="banner">
                 <KeyRound size={18} />
                 <span>La clé de ce serveur a été révoquée : SSH Gate n'y a plus accès.</span>
@@ -333,7 +352,11 @@ export function ServerScreen(props: Props) {
               )
             )}
             {polled.error && !polled.data && <div className="empty-journal">{polled.error}</div>}
-            {polled.data && <Journal requests={finished} onChanged={refresh} onError={onError} />}
+            {polled.data && (
+              <ExplainBlockedContext.Provider value={explainBlocked}>
+                <Journal requests={finished} readOnly={closed} onChanged={refresh} onError={onError} />
+              </ExplainBlockedContext.Provider>
+            )}
             {running && <RunCard request={running} onError={onError} />}
             {pending[0] && (
               <RequestCard
@@ -349,7 +372,15 @@ export function ServerScreen(props: Props) {
           </div>
 
           <footer className="footer">
-            <ManualPrompt server={server} session={session} disabledReason={disabledReason} onRun={refresh} onError={onError} />
+            {closed ? (
+              <div className="prompt readonly">
+                <Lock size={16} />
+                <span className="prompt-readonly-label">Lecture seule</span>
+                <span>Session fermée : son journal reste consultable {CLOSED_SESSION_RETENTION_MS / 3_600_000} h après la fermeture, puis il est effacé.</span>
+              </div>
+            ) : (
+              <ManualPrompt server={server} session={session} disabledReason={disabledReason} onRun={refresh} onError={onError} />
+            )}
           </footer>
         </div>
 

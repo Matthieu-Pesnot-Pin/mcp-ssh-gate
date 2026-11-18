@@ -1,6 +1,7 @@
 import { useRef, useState, type PointerEvent } from 'react'
 import { Bot, ChevronDown, ChevronRight, ListChecks, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
 import type { ServerView, SessionView, TerminalView } from '@shared/model'
+import { shortAge } from '../format'
 import { SIDEBAR_DEFAULT_WIDTH } from '../prefs'
 
 interface Props {
@@ -32,6 +33,48 @@ function SessionState({ session }: { session: SessionView }) {
   if (session.busy) return <LoaderCircle size={14} className="spin status-run" aria-label="Exécution en cours" />
   if (session.pendingCount > 0) return <span className="badge badge-sm">{session.pendingCount}</span>
   return <span />
+}
+
+interface ClosedProps {
+  server: ServerView
+  /** Session fermée affichée, s'il y en a une dans ce serveur. */
+  selectedSessionId: string | null
+  onSelectSession: (serverId: string, sessionId: string | null) => void
+}
+
+/** Sessions fermées d'un serveur, sous ses sessions ouvertes ; dépliées d'office quand l'une d'elles est affichée. */
+function ClosedSessions({ server, selectedSessionId, onSelectSession }: ClosedProps) {
+  const [open, setOpen] = useState(false)
+  const showing = server.closedSessions.some((s) => s.id === selectedSessionId)
+  const expanded = open || showing
+  const Chevron = expanded ? ChevronDown : ChevronRight
+  if (server.closedSessions.length === 0) return null
+
+  return (
+    <>
+      <button className="session-row closed-toggle" onClick={() => setOpen(!open)} aria-expanded={expanded}>
+        <Chevron size={14} className="session-icon" />
+        <span className="session-name">Fermées</span>
+        <span className="closed-age">{server.closedSessions.length}</span>
+      </button>
+      {expanded && (
+        <div className="closed-list">
+          {server.closedSessions.map((session) => (
+            <button
+              key={session.id}
+              className={`session-row closed${session.id === selectedSessionId ? ' selected' : ''}`}
+              onClick={() => onSelectSession(server.id, session.id)}
+              title={`Fermée il y a ${shortAge(session.closedAt!)}`}
+            >
+              <Bot size={15} className="session-icon" />
+              <span className="session-name">{session.name}</span>
+              <span className="closed-age">{shortAge(session.closedAt!)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  )
 }
 
 /** Poignée du bord droit : glisser change la largeur, un double-clic rend la largeur par défaut. */
@@ -72,7 +115,8 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
 
 /**
  * Barre latérale : les terminaux de tous les serveurs, puis les serveurs. Sous chaque
- * serveur, déplié par son chevron : ses terminaux, ta session, puis celles des agents.
+ * serveur, déplié par son chevron : ses terminaux, ta session, celles des agents, puis
+ * les sessions fermées encore consultables.
  * Un clic sur la ligne d'un serveur ouvre son onglet sans le déplier.
  */
 export function Sidebar({
@@ -160,6 +204,7 @@ export function Sidebar({
                       </button>
                     )
                   })}
+                  <ClosedSessions server={server} selectedSessionId={selected ? selectedSessionId : null} onSelectSession={onSelectSession} />
                 </div>
               )}
             </div>

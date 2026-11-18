@@ -29,3 +29,17 @@ export function ago(iso: string, now: number = Date.now()): string {
 export function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count > 1 ? pluralForm : singular}`
 }
+
+/** Ancienneté courte d'un instant : `2 min`, `9 h`. */
+export function shortAge(iso: string, now: number = Date.now()): string {
+  const minutes = Math.max(0, Math.floor((now - Date.parse(iso)) / 60_000))
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
+}
+
+/** Délai jusqu'à un instant à venir : `dans 34 h`, `dans 12 min`, `dans un instant`. */
+export function within(iso: string, now: number = Date.now()): string {
+  const minutes = Math.floor((Date.parse(iso) - now) / 60_000)
+  if (minutes < 1) return 'dans un instant'
+  if (minutes < 60) return `dans ${minutes} min`
+  return `dans ${Math.floor(minutes / 60)} h`
+}

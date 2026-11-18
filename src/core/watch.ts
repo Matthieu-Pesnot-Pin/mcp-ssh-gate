@@ -12,7 +12,7 @@ import { SessionStore } from "./session-store.js";
 export const MONITOR_TIMEOUT_MS = 1_800_000;
 
 const SCAN_INTERVAL_MS = 1_000;
-const WATCHER_BEAT_MS = 5_000;
+export const WATCHER_BEAT_MS = 5_000;
 const WATCHER_STALE_MS = 15_000;
 const HANDOFF_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const BACKOFF_MAX_MS = 30_000;
@@ -303,7 +303,12 @@ function watcherBeatPath(dataDir: string, agent: string): string {
   return path.join(dataDir, "watchers", `${agent}.json`);
 }
 
-/** Date depuis laquelle un veilleur local vivant surveille cet agent, ou null. */
+/** Signale qu'un veilleur suit cet agent depuis `since`. */
+export function writeWatcherBeat(dataDir: string, agent: string, since: string): void {
+  writeJsonAtomic(watcherBeatPath(dataDir, agent), { since, updatedAt: Date.now() });
+}
+
+/** Date depuis laquelle un veilleur vivant surveille cet agent, ou null. */
 export function liveWatcherSince(dataDir: string, agent: string): string | null {
   try {
     const beat = readJson<{ since: string; updatedAt: number }>(watcherBeatPath(dataDir, agent));
@@ -336,7 +341,7 @@ export async function runWatchMode(agent: string | null): Promise<void> {
   for (;;) {
     try {
       if (Date.now() - lastBeat >= WATCHER_BEAT_MS) {
-        writeJsonAtomic(watcherBeatPath(handoff.dataDir, agent), { since, updatedAt: Date.now() });
+        writeWatcherBeat(handoff.dataDir, agent, since);
         lastBeat = Date.now();
       }
       const events = scanner.since(cursor);

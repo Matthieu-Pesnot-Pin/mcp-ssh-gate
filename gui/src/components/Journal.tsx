@@ -112,7 +112,7 @@ function ClosedEntry({ request }: { request: GateRequest }) {
 }
 
 /** Commande saisie par l'utilisateur dans une session d'agent : envoi du résultat à cet agent, une seule fois. */
-function ShareRow({ request, onShared, onError }: { request: GateRequest; onShared: () => void; onError: (message: string) => void }) {
+function ShareRow({ request, readOnly, onShared, onError }: { request: GateRequest; readOnly: boolean; onShared: () => void; onError: (message: string) => void }) {
   const [sending, setSending] = useState(false)
 
   async function share() {
@@ -126,6 +126,8 @@ function ShareRow({ request, onShared, onError }: { request: GateRequest; onShar
       setSending(false)
     }
   }
+
+  if (readOnly && !request.sharedAt) return null
 
   return (
     <div className="share-row">
@@ -146,12 +148,14 @@ function ShareRow({ request, onShared, onError }: { request: GateRequest; onShar
 
 interface Props {
   requests: GateRequest[]
+  /** Session fermée : plus rien n'est envoyé à l'agent. */
+  readOnly: boolean
   onChanged: () => void
   onError: (message: string) => void
 }
 
 /** Historique d'une session : ses demandes terminées, les plus anciennes en haut. */
-export function Journal({ requests, onChanged, onError }: Props) {
+export function Journal({ requests, readOnly, onChanged, onError }: Props) {
   if (requests.length === 0) {
     return <div className="empty-journal">Aucune commande exécutée dans cette session.</div>
   }
@@ -179,7 +183,7 @@ export function Journal({ requests, onChanged, onError }: Props) {
                 {request.note && <div>Note pour l'agent : {request.note}</div>}
               </div>
             )}
-            {request.source === 'user' && request.sessionId !== null && <ShareRow request={request} onShared={onChanged} onError={onError} />}
+            {request.source === 'user' && request.sessionId !== null && <ShareRow request={request} readOnly={readOnly} onShared={onChanged} onError={onError} />}
           </div>
         )
       })}

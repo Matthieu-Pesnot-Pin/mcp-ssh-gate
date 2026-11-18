@@ -125,6 +125,9 @@ export interface AgentSession {
 
 export const MAX_SESSION_NAME_LENGTH = 40;
 
+/** Durée pendant laquelle une session fermée reste consultable ; au-delà, elle est effacée avec son journal. */
+export const CLOSED_SESSION_RETENTION_MS = 36 * 60 * 60 * 1000;
+
 /** Identité d'un agent, propre à sa conversation : elle rattache ses sessions à un seul veilleur. */
 export interface AgentIdentity {
   id: string;
@@ -142,11 +145,20 @@ export interface SessionView {
   cwd: string | null;
   pendingCount: number;
   busy: boolean;
+  /** Fermeture de la session ; null pour une session ouverte. */
+  closedAt: string | null;
+  closedBy: SessionCloser | null;
+  /** Instant où la session fermée sera effacée ; null pour une session ouverte. */
+  purgeAt: string | null;
+  /** Pour une session fermée : vrai quand un veilleur de son agent tourne et peut répondre à une question ; null pour une session ouverte. */
+  agentListening: boolean | null;
 }
 
 export interface ServerView extends ServerPublic {
   /** La session « Vous » d'abord, puis les sessions d'agent ouvertes, des plus anciennes aux plus récentes. */
   sessions: SessionView[];
+  /** Sessions d'agent fermées, encore consultables, les plus récemment fermées d'abord. */
+  closedSessions: SessionView[];
   pendingCount: number;
   /** Vrai quand une demande s'exécute dans l'une des sessions du serveur. */
   busy: boolean;

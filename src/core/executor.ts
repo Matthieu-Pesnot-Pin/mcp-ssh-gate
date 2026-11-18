@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { MAX_STATEMENT_LENGTH, isFinalStatus, type AutoApproval, type GateRequest, type RequestStatus, type ServerView, type SessionView } from "../../shared/model.js";
+import { CLOSED_SESSION_RETENTION_MS, MAX_STATEMENT_LENGTH, isFinalStatus, type AgentSession, type AutoApproval, type GateRequest, type RequestStatus, type ServerView, type SessionView } from "../../shared/model.js";
 import { protectCommand } from "./command-parser.js";
 import { GateError } from "./errors.js";
 import type { RequestStore } from "./request-store.js";
@@ -59,7 +59,9 @@ export class Executor {
     private readonly servers: ServerStore,
     private readonly requests: RequestStore,
     private readonly sessions: SessionStore,
-    private readonly log: (message: string) => void
+    private readonly log: (message: string) => void,
+    /** Vrai quand un veilleur de cet agent tourne. */
+    private readonly isAgentListening: (agentId: string) => boolean
   ) {}
 
   /** Marque en échec les demandes restées « en cours » après l'arrêt du worker. */
@@ -96,6 +98,7 @@ export class Executor {
     return {
       ...toPublic(server),
       sessions,
+      closedSessions: this.sessions.listClosed(server.id).map((session) => this.closedSessionView(session)),
       pendingCount: sessions.reduce((sum, session) => sum + session.pendingCount, 0),
       busy: sessions.some((session) => session.busy),
     };
@@ -113,6 +116,28 @@ export class Executor {
       cwd: shell ? shell.cwd : null,
       pendingCount: open.filter((r) => r.serverId === serverId && r.sessionId === sessionId && r.status === "pending").length,
       busy: this.running.has(key),
+      closedAt: null,
+      closedBy: null,
+      purgeAt: null,
+      agentListening: null,
+    };
+  }
+
+  private closedSessionView(session: AgentSession): SessionView {
+    const closedAt = session.closedAt!;
+    return {
+      id: session.id,
+      serverId: session.serverId,
+      name: session.name,
+      openedAt: session.openedAt,
+      shell: "closed",
+      cwd: null,
+      pendingCount: 0,
+      busy: false,
+      closedAt,
+      closedBy: session.closedBy,
+      purgeAt: new Date(Date.parse(closedAt) + CLOSED_SESSION_RETENTION_MS).toISOString(),
+      agentListening: this.isAgentListening(session.agentId),
     };
   }
 

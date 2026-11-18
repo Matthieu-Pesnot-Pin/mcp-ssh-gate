@@ -205,3 +205,36 @@ test("events of the same instant are announced in creation order", () => {
     [first.id, second.id]
   );
 });
+
+test("purging closed sessions removes the expired ones with their journal and keeps the rest", () => {
+  const dir = tempDir();
+  const requests = new RequestStore(dir);
+  const sessions = new SessionStore(dir);
+  const agent = sessions.createAgent();
+  const old = sessions.open("web", "old", agent.id);
+  const recent = sessions.open("web", "recent", agent.id);
+  const open = sessions.open("web", "open", agent.id);
+  for (const session of [old, recent, open]) {
+    requests.create({ serverId: "web", source: "agent", sessionId: session.id, explanation: session.name, commands: ["ls"] });
+  }
+  requests.create({ serverId: "web", source: "user", sessionId: null, explanation: "", commands: ["pwd"] });
+  sessions.close(old.id, "agent", requests);
+  sessions.close(recent.id, "user", requests);
+
+  assert.deepEqual(sessions.listClosed("web").map((s) => s.id).sort(), [old.id, recent.id].sort());
+  const oldFile = path.join(dir, "sessions", `${old.id}.json`);
+  const hoursAgo = (hours: number) => Date.now() - hours * 3600_000;
+  fs.writeFileSync(oldFile, JSON.stringify({ ...sessions.get(old.id), closedAt: new Date(hoursAgo(40)).toISOString() }));
+  assert.deepEqual(sessions.listClosed("web").map((s) => s.id), [recent.id, old.id]);
+
+  const purged = sessions.purgeClosed(hoursAgo(36), requests);
+  assert.deepEqual(purged.map((s) => s.id), [old.id]);
+  assert.throws(() => sessions.get(old.id), /Unknown session/);
+  assert.ok(sessions.get(recent.id).closedAt);
+  assert.equal(sessions.get(open.id).closedAt, null);
+  const left = requests.listForServer("web").map((r) => r.sessionId);
+  assert.ok(!left.includes(old.id));
+  assert.ok(left.includes(recent.id));
+  assert.ok(left.includes(open.id));
+  assert.ok(left.includes(null));
+});

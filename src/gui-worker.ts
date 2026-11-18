@@ -17,15 +17,16 @@ import {
   trustedOriginHostnames,
 } from "@imenam/mcp-gui-interface";
 
-import type {
-  RequestEvaluation,
-  RequestsResponse,
-  StateResponse,
-  TerminalClientMessage,
-  TerminalsResponse,
-  TestConnectionResponse,
-  WhitelistResponse,
-  WhitelistTestResponse,
+import {
+  CLOSED_SESSION_RETENTION_MS,
+  type RequestEvaluation,
+  type RequestsResponse,
+  type StateResponse,
+  type TerminalClientMessage,
+  type TerminalsResponse,
+  type TestConnectionResponse,
+  type WhitelistResponse,
+  type WhitelistTestResponse,
 } from "../shared/model.js";
 import { APP_VERSION } from "./version.js";
 import { findProjectRoot, loadConfig } from "./core/config.js";
@@ -41,6 +42,7 @@ import { SettingsStore } from "./core/settings-store.js";
 import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
 import { WhitelistStore, evaluateCommand, evaluateRequest, type AppliedRules } from "./core/whitelist.js";
+import { liveWatcherSince } from "./core/watch.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = findProjectRoot(__dirname);
@@ -66,13 +68,31 @@ const servers = new ServerStore(config.dataDir, config.vaultKey);
 const requests = new RequestStore(config.dataDir);
 const settings = new SettingsStore(config.dataDir);
 const sessions = new SessionStore(config.dataDir);
-const executor = new Executor(servers, requests, sessions, (message) => logger.info(message));
+const executor = new Executor(
+  servers,
+  requests,
+  sessions,
+  (message) => logger.info(message),
+  (agentId) => liveWatcherSince(config.dataDir, agentId) !== null
+);
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
 const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
 const whitelist = new WhitelistStore(config.dataDir);
 const autoApprover = new AutoApprover(servers, requests, whitelist, executor, (message) => logger.info(message));
 
 const AUTO_APPROVAL_INTERVAL_MS = 1000;
+const PURGE_INTERVAL_MS = 10 * 60 * 1000;
+
+/** Efface les sessions fermées depuis plus de CLOSED_SESSION_RETENTION_MS, avec leur journal. */
+function purgeClosedSessions(): void {
+  try {
+    for (const session of sessions.purgeClosed(Date.now() - CLOSED_SESSION_RETENTION_MS, requests)) {
+      logger.info(`Closed session ${session.id} purged`);
+    }
+  } catch (err: any) {
+    logger.error(`Purge of closed sessions failed: ${err?.stack ?? err}`);
+  }
+}
 
 // Le worker s'arrête avec le processus MCP qui l'a lancé : canal IPC fermé, ou PID parent disparu.
 const parentPid = process.ppid;
@@ -416,6 +436,8 @@ function listen(port: number, publicUrl: string) {
   const instance = serve({ fetch: app.fetch, port, hostname: GUI_LISTEN_HOST }, (info) => {
     logger.info(`GUI listening on port ${info.port}`);
     executor.recoverAbandoned();
+    purgeClosedSessions();
+    setInterval(purgeClosedSessions, PURGE_INTERVAL_MS);
     setInterval(() => autoApprover.run(), AUTO_APPROVAL_INTERVAL_MS);
     writeHeartbeat(config.dataDir, publicUrl);
     setInterval(() => writeHeartbeat(config.dataDir, publicUrl), HEARTBEAT_INTERVAL_MS);
