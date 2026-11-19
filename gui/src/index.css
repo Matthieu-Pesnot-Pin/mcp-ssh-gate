@@ -682,6 +682,15 @@ body.resizing {
   color: var(--muted);
 }
 
+.journal-explanation {
+  margin: 8px 0 -2px;
+  padding: 0 16px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+}
+
 .share-row {
   display: flex;
   justify-content: flex-end;

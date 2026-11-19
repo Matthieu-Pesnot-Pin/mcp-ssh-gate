@@ -268,6 +268,8 @@ export function RunCard({ request, onError }: RunCardProps) {
         </span>
       </div>
 
+      {request.explanation && <p className="explanation">{request.explanation}</p>}
+
       {total > 1 && (
         <div className="cmd-list" style={{ gap: 4 }}>
           {request.commands.map((command, index) => (

@@ -86,6 +86,12 @@ function CommandEntry({ request, index, defaultOpen, onChanged, onError }: Entry
   )
 }
 
+/** Explication donnée par l'agent avec sa demande. */
+function RequestExplanation({ request }: { request: GateRequest }) {
+  if (!request.explanation) return null
+  return <p className="journal-explanation">{request.explanation}</p>
+}
+
 /** Demande refusée ou retirée : une seule ligne, avec le motif. */
 function ClosedEntry({ request }: { request: GateRequest }) {
   const label =
@@ -93,20 +99,23 @@ function ClosedEntry({ request }: { request: GateRequest }) {
       ? `${plural(request.commands.length, 'commande refusée', 'commandes refusées')}`
       : `${plural(request.commands.length, 'commande retirée', 'commandes retirées')} par l'agent`
   return (
-    <div className="entry">
-      <div className="entry-head">
-        <span className="entry-actor">{actor(request)}</span>
-        <span className="entry-time">{clock(request.createdAt)}</span>
-        <span className="entry-cmd dim" title={request.commands.map((c) => c.command).join('\n')}>
-          {request.commands.map((c) => c.command).join('  ·  ')}
-        </span>
-        <span className="entry-status">
-          {label}
-          <Ban size={18} className="status-idle" />
-        </span>
-        <span />
+    <div style={{ display: 'contents' }}>
+      <RequestExplanation request={request} />
+      <div className="entry">
+        <div className="entry-head">
+          <span className="entry-actor">{actor(request)}</span>
+          <span className="entry-time">{clock(request.createdAt)}</span>
+          <span className="entry-cmd dim" title={request.commands.map((c) => c.command).join('\n')}>
+            {request.commands.map((c) => c.command).join('  ·  ')}
+          </span>
+          <span className="entry-status">
+            {label}
+            <Ban size={18} className="status-idle" />
+          </span>
+          <span />
+        </div>
+        {request.note && <div className="entry-note">Motif : {request.note}</div>}
       </div>
-      {request.note && <div className="entry-note">Motif : {request.note}</div>}
     </div>
   )
 }
@@ -167,6 +176,7 @@ export function Journal({ requests, readOnly, onChanged, onError }: Props) {
         if (request.status === 'refused' || request.status === 'cancelled') return <ClosedEntry key={request.id} request={request} />
         return (
           <div key={request.id} style={{ display: 'contents' }}>
+            <RequestExplanation request={request} />
             {request.commands.map((command, index) => (
               <CommandEntry
                 key={`${request.id}:${index}`}
