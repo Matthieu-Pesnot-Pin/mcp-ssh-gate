@@ -38,6 +38,11 @@ if (watchIndex !== -1) {
   process.exit(0);
 }
 
+if (argv.includes("--migrate-to-manager")) {
+  const { runMigrateToManager } = await import("./cli/migrate-to-manager.js");
+  process.exit(await runMigrateToManager(argv, process.cwd()));
+}
+
 if (argv.includes("--claude-setup-mcp")) {
   const { runSetupMcp, parseGuiExposure } = await import("./cli/setup-mcp.js");
   const parsed = parseGuiExposure(argv);

@@ -90,6 +90,22 @@ Ajoute le MCP à une gateway avec ces variables, et coche **secret** pour `VAULT
 }
 ```
 
+### Passage au gateway manager
+
+Lancer dans le dossier du projet dont le `.mcp.json` déclare SSH Gate :
+
+```bash
+npx -y @imenam/mcp-ssh-gate@latest --migrate-to-manager --name ssh-gate
+```
+
+La commande écrit `ssh-gate.mcp-import.zip` dans le dossier courant, à importer depuis l'onglet **MCP** de la gateway (« Importer un MCP »). `--name` désigne l'entrée de `.mcp.json` ; il est obligatoire quand SSH Gate y est déclaré plusieurs fois, et la commande échoue sinon en listant les entrées.
+
+- **Repris :** les serveurs et leurs clés chiffrées (`servers.json`), la liste blanche, les réglages de l'interface, l'historique des demandes, les sessions et les identités d'agent — chaque fichier copié sous son verrou, donc cohérent même serveur lancé — et les variables d'environnement. `VAULT_KEY` est marquée secrète : sans elle, les clés importées sont illisibles.
+- **Écarté :** les logs, le battement de l'interface (`gui.json`), ceux des veilleurs (`watchers/`), les verrous et les fichiers temporaires.
+- **Fixé par le hub :** `DATA_DIR`, `PROXY_URL`, `APP_PORT`, `APP_PATH`, `APP_NAME`, `APP_GROUP`, `MCP_LOG_DIR`.
+
+L'archive contient `VAULT_KEY` en clair, lisible par vous seul : la supprimer une fois importée.
+
 ### Dans mcp-http-gateway
 
 Le MCP se déclare dans un gateway ([mcp-http-gateway](https://www.npmjs.com/package/@imenam/mcp-http-gateway)) comme tout autre MCP, dans `config/mcp-servers.json` :
