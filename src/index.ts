@@ -175,7 +175,13 @@ const toolContext: ToolContext = {
 };
 process.on("exit", removeOwnHandoffs);
 
-const server = new Server({ name: "mcp-ssh-gate", version: APP_VERSION }, { capabilities: { tools: {} } });
+const INSTRUCTIONS = [
+  "mcp-ssh-gate runs shell commands on SSH servers once the user approves them in a web GUI.",
+  "Start every conversation by calling enable_notifications without arguments: it creates your agent id and returns the Monitor call that arms your notification watcher. Arm it right away.",
+  "Pass that agent_id to every submit_commands that opens a session, then keep working: the watcher tells you when a request is finished, and get_result returns its outcome.",
+].join("\n");
+
+const server = new Server({ name: "mcp-ssh-gate", version: APP_VERSION }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
 

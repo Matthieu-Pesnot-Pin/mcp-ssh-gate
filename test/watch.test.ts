@@ -132,14 +132,21 @@ test("behind the gateway: enable_notifications returns a watch specification for
   const db = ctx.sessions.open("db", "migration", agent.id);
   const web = ctx.sessions.open("web", "deploy", agent.id);
 
-  const refused = await callTool(ctx, "enable_notifications", { _gateway_watch: { version: 1 } });
+  const refused = await callTool(ctx, "enable_notifications", { agent_id: "ag_00000000", _gateway_watch: { version: 1 } });
   assert.equal(refused.isError, true);
 
+  const created = await callTool(ctx, "enable_notifications", { _gateway_watch: { version: 1 } });
+  const createdSpec = created._meta?.["gateway/watch"] as { arguments: { agent_id: string }; message: string };
+  assert.match(createdSpec.arguments.agent_id, /^ag_[0-9a-f]{8}$/);
+  assert.notEqual(createdSpec.arguments.agent_id, agent.id);
+  assert.match(createdSpec.message, new RegExp(`^Your agent id is ${createdSpec.arguments.agent_id}\\.`));
+
   const enabled = await callTool(ctx, "enable_notifications", { agent_id: agent.id, _gateway_watch: { version: 1 } });
-  const spec = enabled._meta?.["gateway/watch"] as { tool: string; arguments: object; cursor: string; description: string };
+  const spec = enabled._meta?.["gateway/watch"] as { tool: string; arguments: object; cursor: string; description: string; message: string };
   assert.equal(spec.tool, "wait_for_notifications");
   assert.deepEqual(spec.arguments, { agent_id: agent.id });
   assert.match(spec.cursor, /^\d+$/);
+  assert.match(spec.message, new RegExp(`^Your agent id is ${agent.id}\\.`));
 
   await new Promise((resolve) => setTimeout(resolve, 5));
   const mine = requests.create({ serverId: "db", source: "agent", sessionId: db.id, explanation: "", commands: ["a", "b"] });
@@ -212,7 +219,7 @@ test("event lines describe refusals", () => {
   assert.match(formatEvent(refused), /request \S+ refused by the user: pas en prod aujourd'hui —/);
 });
 
-test("sessions: submit_commands opens a session when given a server, the first one creates the agent id, later ones reuse it, and close_session withdraws pending requests silently", async () => {
+test("sessions: enable_notifications creates the agent id, submit_commands requires it to open a session, and close_session withdraws pending requests silently", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-sessions-"));
   const ctx = toolContext(dataDir);
   ctx.servers.create({ name: "web", host: "10.0.0.1", port: 22, username: "deploy" });
@@ -220,17 +227,24 @@ test("sessions: submit_commands opens a session when given a server, the first o
   const read = async (name: string, args: unknown) => ((await callTool(ctx, name, args)).content[0] as { text: string }).text;
   const submit = (args: object) => read("submit_commands", { commands: ["ls"], explanation: "list", ...args });
 
-  assert.match(await submit({ server: "web", session_name: "deploy" }), /has never been tested/);
+  const enabled = await read("enable_notifications", {});
+  const agentId = /Your agent id is (ag_[0-9a-f]{8})\./.exec(enabled)?.[1];
+  assert.ok(agentId, enabled);
+  assert.match(enabled, new RegExp(`Notifications enabled for agent ${agentId}[\\s\\S]*command:     watch ${agentId}`));
+
+  assert.match(await submit({ server: "web", session_name: "deploy", agent_id: agentId }), /has never been tested/);
   assert.deepEqual(ctx.sessions.listOpen(), []);
   ctx.servers.setFingerprint("web", "SHA256:abc");
   ctx.servers.setFingerprint("db", "SHA256:def");
   assert.match(await submit({}), /Give session_id to run in an open session, or server and session_name/);
   assert.match(await submit({ server: "web" }), /Give session_id to run in an open session, or server and session_name/);
+  assert.match(await submit({ server: "web", session_name: "deploy" }), /Give agent_id to open a session\. Call enable_notifications first/);
+  assert.deepEqual(ctx.sessions.listOpen(), []);
 
-  const opened = await submit({ server: "web", session_name: "  deploy   shop " });
+  const opened = await submit({ server: "web", session_name: "  deploy   shop ", agent_id: agentId });
   const id = /Session (sh_[0-9a-f]{8}) was opened on web as "deploy shop"/.exec(opened)?.[1];
-  const agentId = /Your agent id is (ag_[0-9a-f]{8})\./.exec(opened)?.[1];
-  assert.ok(id && agentId, opened);
+  assert.ok(id, opened);
+  assert.match(opened, new RegExp(`tied to your agent id ${agentId}: the watcher you armed`));
   assert.match(opened, new RegExp(`Request \\S+ submitted to session ${id} on web`));
   assert.match(await read("list_servers", {}), new RegExp(`Open agent sessions: ${id} "deploy shop"`));
   const [pending] = ctx.requests.listOpen();
@@ -243,8 +257,8 @@ test("sessions: submit_commands opens a session when given a server, the first o
   const secondId = /Session (sh_[0-9a-f]{8})/.exec(second)![1];
   assert.deepEqual(ctx.sessions.listForAgent(agentId!).map((s) => s.id).sort(), [id, secondId].sort());
 
-  assert.match(await read("enable_notifications", {}), /agent_id/);
-  assert.match(await read("enable_notifications", { agent_id: agentId }), new RegExp(`Notifications enabled for agent ${agentId}[\\s\\S]*command:     watch ${agentId}`));
+  assert.match(await read("enable_notifications", { agent_id: agentId }), new RegExp(`Your agent id is ${agentId}\\.[\\s\\S]*command:     watch ${agentId}`));
+  assert.match(await read("enable_notifications", { agent_id: "ag_00000000" }), /Unknown agent id/);
 
   assert.match(await submit({ session_id: "sh_00000000" }), /Unknown session/);
   const again = await submit({ session_id: id });

@@ -35,7 +35,7 @@ export class SessionStore {
     const value = String(id ?? "").trim();
     if (!AGENT_ID_PATTERN.test(value)) throw new GateError(`Invalid agent id "${id}".`);
     const file = path.join(this.agentsRoot, `${value}.json`);
-    if (!fs.existsSync(file)) throw new GateError(`Unknown agent id "${id}": use the agent_id returned when you opened your first session.`);
+    if (!fs.existsSync(file)) throw new GateError(`Unknown agent id "${id}": use the agent_id returned by enable_notifications, or call it without agent_id to get a new one.`);
     return readJson<AgentIdentity>(file);
   }
 

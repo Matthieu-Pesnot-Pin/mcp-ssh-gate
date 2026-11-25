@@ -35,7 +35,7 @@ const HISTORY_OUTPUT_PER_COMMAND = 2_000;
 const POLL_MS = 1000;
 
 const SESSION_ID_PROPERTY = { type: "string", description: "Id of your session, as returned by the submit_commands call that opened it." };
-const AGENT_ID_PROPERTY = { type: "string", description: "Your agent id, returned by the submit_commands call that opened your first session." };
+const AGENT_ID_PROPERTY = { type: "string", description: "Your agent id, returned by enable_notifications." };
 
 export const TOOL_DEFINITIONS: Tool[] = [
   {
@@ -51,19 +51,21 @@ export const TOOL_DEFINITIONS: Tool[] = [
   {
     name: "enable_notifications",
     description:
-      "Get notified of what happens in all your sessions, including the ones you open later with the same agent_id: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in one of your sessions, the user asks you to explain a command, or the user closes one of your sessions. " +
-      "Returns immediately and hands you the exact Monitor call to make right after: arming that watcher is what delivers the notifications. " +
-      "Call it once per conversation, right after the submit_commands call that opened your first session — never once per session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
+      "Call it first, before any other SSH Gate tool: it creates your agent id and gets you notified of what happens in all the sessions you open with that agent_id: a request you submitted is finished (all its commands ran, or the user refused or interrupted it), the user sends you a command they ran themselves in one of your sessions, the user asks you to explain a command, or the user closes one of your sessions. " +
+      "Returns immediately with your agent id and the exact Monitor call to make right after: arming that watcher is what delivers the notifications. Pass that agent_id to every submit_commands that opens a session. " +
+      "Call it once per conversation, never once per session; the host stops the watcher after 30 minutes at most, re-arm it with the same Monitor call each time it expires. Works locally and behind mcp-http-gateway.",
     inputSchema: {
       type: "object",
       properties: {
-        agent_id: AGENT_ID_PROPERTY,
+        agent_id: {
+          type: "string",
+          description: "Omit it: a new agent id is created. Give it only to enable notifications again for the agent id you already have in this conversation.",
+        },
         [WATCH_ARG]: {
           type: "object",
           description: "Filled in by the mcp-http-gateway relay, never by the agent: the relay will run the watcher and needs a watch specification instead of a local command",
         },
       },
-      required: ["agent_id"],
     },
   },
   {
@@ -116,13 +118,12 @@ export const TOOL_DEFINITIONS: Tool[] = [
       `Submit shell commands to run in one of your sessions on a server. Read the server notes from list_servers first. ` +
       `To run in a new session, omit session_id and give server and session_name: the session is opened with this request and its session_id is returned. ` +
       `Pass that session_id to every later submit_commands of the same task: each session has its own persistent bash shell, and only you are notified of what happens in it. Close it with close_session when its task is done. ` +
-      `Your sessions are tied to your agent id, so a single notification watcher covers all of them: when you open your first session, omit agent_id — a new agent id is created and returned, then call enable_notifications with it once. ` +
-      `Pass that same agent_id whenever you open another session in this conversation: its events reach the watcher you already armed. ` +
+      `Opening a session requires your agent_id, returned by enable_notifications: call that tool first, once per conversation. Your sessions are tied to that agent id, so the single watcher it arms covers all of them. ` +
       `Nothing runs until the user approves the commands in the web GUI: they can edit or remove a command, add a note, or refuse the whole request. ` +
       `Exception: when the user enabled a whitelist on that server and it covers every part of every command (each part between &&, ||, ;, | or &), the request runs right away without waiting. ` +
       `Variables, $( ), redirections to files, bash -c, xargs and the like are never covered: keep commands plain when you can. ` +
       `Approved commands run in order in the persistent bash shell of your session (cd and export carry over between commands and between your requests, never to other sessions), without a terminal: stdin is /dev/null and stderr is merged into stdout, so interactive prompts get end-of-file and sudo must not ask for a password. ` +
-      `Execution stops at the first command that exits non-zero. Returns a request_id. Call enable_notifications first and keep working: you are notified when the request is finished, then read the outcome with get_result. ` +
+      `Execution stops at the first command that exits non-zero. Returns a request_id. Keep working: your watcher tells you when the request is finished, then read the outcome with get_result. ` +
       `Give 1 to ${MAX_COMMANDS_PER_REQUEST} commands and explain what you want to achieve: the user reads the explanation before approving.`,
     inputSchema: {
       type: "object",
@@ -136,7 +137,7 @@ export const TOOL_DEFINITIONS: Tool[] = [
         },
         agent_id: {
           type: "string",
-          description: "Only to open a new session, without session_id: your agent id, returned when you opened your first session. Omit it only when opening the first session of this conversation.",
+          description: "Required to open a new session, without session_id: your agent id, returned by enable_notifications.",
         },
         commands: {
           type: "array",
@@ -230,7 +231,7 @@ const NotesArgs = z.object({
   notes: z.string(),
   mode: z.enum(["append", "replace"]).optional(),
 });
-const EnableArgs = z.object({ agent_id: z.string().min(1), [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
+const EnableArgs = z.object({ agent_id: z.string().min(1).optional(), [WATCH_ARG]: z.looseObject({ version: z.number() }).optional() });
 const NotificationWaitArgs = z.object({
   agent_id: z.string().min(1),
   cursor: z.string().regex(/^[0-9]+$/).optional(),
@@ -311,9 +312,7 @@ function updateServerNotes(ctx: ToolContext, args: unknown): CallToolResult {
   return text(`Notes of ${saved.id} saved (${saved.notes.length} characters). The user sees them in the GUI.`);
 }
 
-type ResolvedSession =
-  | { session: AgentSession; server: StoredServer; opened: false }
-  | { session: AgentSession; server: StoredServer; opened: true; newAgent: boolean };
+type ResolvedSession = { session: AgentSession; server: StoredServer; opened: boolean };
 
 /** Session de la demande : celle de `session_id`, ou une nouvelle ouverte sur `server` sous `session_name`. */
 function resolveSession(ctx: ToolContext, input: z.infer<typeof SubmitArgs>): ResolvedSession {
@@ -329,11 +328,13 @@ function resolveSession(ctx: ToolContext, input: z.infer<typeof SubmitArgs>): Re
   if (input.server === undefined || input.session_name === undefined) {
     throw new GateError("Give session_id to run in an open session, or server and session_name to open a new one.");
   }
+  if (input.agent_id === undefined) {
+    throw new GateError("Give agent_id to open a session. Call enable_notifications first: it returns your agent id and arms the watcher that covers all your sessions.");
+  }
   const server = ctx.servers.get(input.server);
   assertUsable(server);
-  const agent = input.agent_id === undefined ? null : ctx.sessions.getAgent(input.agent_id);
-  const session = ctx.sessions.open(server.id, input.session_name, agent?.id ?? ctx.sessions.createAgent().id);
-  return { session, server, opened: true, newAgent: agent === null };
+  const session = ctx.sessions.open(server.id, input.session_name, input.agent_id);
+  return { session, server, opened: true };
 }
 
 function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
@@ -348,35 +349,26 @@ function submitCommands(ctx: ToolContext, args: unknown): CallToolResult {
   ];
   if (resolved.opened) {
     lines.push(
-      `Session ${session.id} was opened on ${server.id} as "${session.name}". Pass session_id ${session.id} to your next submit_commands in it: its shell is your own, cd and export carry over between your requests and never leak to other sessions. Close it with close_session when its task is done.`
+      `Session ${session.id} was opened on ${server.id} as "${session.name}". Pass session_id ${session.id} to your next submit_commands in it: its shell is your own, cd and export carry over between your requests and never leak to other sessions. Close it with close_session when its task is done.`,
+      `It is tied to your agent id ${session.agentId}: the watcher you armed after enable_notifications already covers it, do not arm another one.`
     );
   }
-  if (resolved.opened && resolved.newAgent) {
-    lines.push(
-      `Your agent id is ${session.agentId}. Call enable_notifications now with agent_id ${session.agentId}: that single watcher covers all your sessions and tells you when this request is finished; then read the outcome with get_result.`,
-      `Pass agent_id ${session.agentId} whenever you open another session in this conversation, so its events reach the same watcher; omitting it creates another agent id that no watcher of yours follows.`
-    );
-  } else {
-    if (resolved.opened) {
-      lines.push(`It is tied to your agent id ${session.agentId}: the watcher you armed with enable_notifications already covers it, do not arm another one.`);
-    }
-    lines.push(
-      `Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result. ` +
-        `If you have not called enable_notifications with your agent_id ${session.agentId} in this conversation, do it now.`
-    );
-  }
+  lines.push(`Keep working: your notification watcher tells you when it is finished, then read the outcome with get_result.`);
   return text(lines.join("\n"));
 }
 
 /**
+ * Active les notifications d'un agent : sans `agent_id`, crée l'identité de l'agent.
  * Derrière mcp-http-gateway, le relais remplit `_gateway_watch` : il fera tourner le
- * veilleur sur la machine de l'agent et a besoin d'une spécification de veille. Sinon,
- * la réponse donne la commande du veilleur local.
+ * veilleur sur la machine de l'agent et a besoin d'une spécification de veille, dont le
+ * `message` donne l'identifiant à l'agent. Sinon, la réponse donne l'identifiant et la
+ * commande du veilleur local.
  */
 function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   const input = parse(EnableArgs, args);
-  const agent = ctx.sessions.getAgent(input.agent_id);
+  const agent = input.agent_id === undefined ? ctx.sessions.createAgent() : ctx.sessions.getAgent(input.agent_id);
   const description = `ssh-gate agent ${agent.id}`;
+  const identity = `Your agent id is ${agent.id}. Pass agent_id ${agent.id} to every submit_commands that opens a session in this conversation: the watcher covers only the sessions tied to that id.`;
   if (input[WATCH_ARG]) {
     return {
       content: [{ type: "text", text: "Watch specification for the mcp-http-gateway relay." }],
@@ -386,6 +378,7 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
           arguments: { agent_id: agent.id },
           cursor: String(Date.now()),
           description,
+          message: identity,
         },
       },
     };
@@ -397,6 +390,7 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   if (since) {
     return text(
       [
+        identity,
         `Notifications are already live for agent ${agent.id} (watcher armed since ${since}): it covers all your sessions, including new ones.`,
         "Nothing to do: do not arm a second watcher, you would get every notification twice.",
         "Only if the host just told you your watcher expired or stopped, re-arm it with the same Monitor call:",
@@ -407,6 +401,7 @@ function enableNotifications(ctx: ToolContext, args: unknown): CallToolResult {
   return text(
     [
       `Notifications enabled for agent ${agent.id}.`,
+      identity,
       "",
       "Last step — call the Monitor tool now, with exactly these arguments:",
       `  command:     ${command}`,
