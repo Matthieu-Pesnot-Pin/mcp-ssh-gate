@@ -1,6 +1,6 @@
 import { useRef, useState, type PointerEvent } from 'react'
-import { Bot, ChevronDown, ChevronRight, ListChecks, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
-import type { ServerView, SessionView, TerminalView } from '@shared/model'
+import { Bot, ChevronDown, ChevronRight, ChevronsLeftRightEllipsis, ListChecks, LoaderCircle, Plus, Settings, SquareTerminal, Terminal, User } from 'lucide-react'
+import type { ServerView, SessionView, TerminalView, TunnelView } from '@shared/model'
 import { shortAge } from '../format'
 import { SIDEBAR_DEFAULT_WIDTH } from '../prefs'
 
@@ -12,6 +12,10 @@ interface Props {
   selectedSessionId: string | null
   /** Vue Terminaux affichée : null si aucune, serverId null pour celle de tous les serveurs. */
   terminalsView: { serverId: string | null } | null
+  /** Vue Tunnels affichée : null si aucune, serverId null pour celle de tous les serveurs. */
+  tunnelsView: { serverId: string | null } | null
+  tunnels: TunnelView[]
+  onOpenTunnels: (serverId: string | null) => void
   /** Vrai quand la page de la liste blanche est affichée. */
   whitelistOpen: boolean
   onOpenWhitelist: () => void
@@ -114,9 +118,9 @@ function ResizeHandle({ width, onResize }: { width: number; onResize: (width: nu
 }
 
 /**
- * Barre latérale : les terminaux de tous les serveurs, puis les serveurs. Sous chaque
- * serveur, déplié par son chevron : ses terminaux, ta session, celles des agents, puis
- * les sessions fermées encore consultables.
+ * Barre latérale : les terminaux, la liste blanche et les tunnels de tous les serveurs,
+ * puis les serveurs. Sous chaque serveur, déplié par son chevron : ses terminaux, ses
+ * tunnels, ta session, celles des agents, puis les sessions fermées encore consultables.
  * Un clic sur la ligne d'un serveur ouvre son onglet sans le déplier.
  */
 export function Sidebar({
@@ -126,6 +130,9 @@ export function Sidebar({
   selectedId,
   selectedSessionId,
   terminalsView,
+  tunnelsView,
+  tunnels,
+  onOpenTunnels,
   whitelistOpen,
   onOpenWhitelist,
   terminals,
@@ -160,17 +167,24 @@ export function Sidebar({
         <span>Liste blanche</span>
         <span />
       </button>
+      <button className={`nav-row${tunnelsView?.serverId === null ? ' selected' : ''}`} onClick={() => onOpenTunnels(null)}>
+        <ChevronsLeftRightEllipsis size={20} />
+        <span>Tunnels</span>
+        {tunnels.length > 0 ? <span className="nav-count">{tunnels.length}</span> : <span />}
+      </button>
       <div className="side-label">SERVEURS</div>
       <div className="server-list">
         {servers.map((server) => {
-          const selected = terminalsView === null && !whitelistOpen && server.id === selectedId
+          const selected = terminalsView === null && tunnelsView === null && !whitelistOpen && server.id === selectedId
           const terminalsSelected = terminalsView?.serverId === server.id
+          const tunnelsSelected = tunnelsView?.serverId === server.id
           const terminalCount = terminals.filter((t) => t.serverId === server.id).length
+          const tunnelCount = tunnels.filter((t) => t.serverId === server.id).length
           const open = expanded.has(server.id)
           const Chevron = open ? ChevronDown : ChevronRight
           return (
             <div key={server.id} className="server-group">
-              <div className={`server-row${selected || terminalsSelected ? ' selected' : ''}`}>
+              <div className={`server-row${selected || terminalsSelected || tunnelsSelected ? ' selected' : ''}`}>
                 <button className="server-toggle" onClick={() => toggle(server.id)} aria-expanded={open} title={open ? 'Replier les sessions' : 'Afficher les sessions'}>
                   <Chevron size={16} />
                 </button>
@@ -189,6 +203,11 @@ export function Sidebar({
                     <SquareTerminal size={15} className="session-icon" />
                     <span className="session-name">Terminaux</span>
                     {terminalCount > 0 ? <span className="session-count">{terminalCount}</span> : <span />}
+                  </button>
+                  <button className={`session-row${tunnelsSelected ? ' selected' : ''}`} onClick={() => onOpenTunnels(server.id)}>
+                    <ChevronsLeftRightEllipsis size={15} className="session-icon" />
+                    <span className="session-name">Tunnels</span>
+                    {tunnelCount > 0 ? <span className="session-count">{tunnelCount}</span> : <span />}
                   </button>
                   {server.sessions.map((session) => {
                     const Icon = session.id === null ? User : Bot

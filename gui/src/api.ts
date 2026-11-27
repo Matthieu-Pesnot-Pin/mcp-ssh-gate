@@ -10,6 +10,9 @@ import type {
   TerminalView,
   TerminalsResponse,
   TestConnectionResponse,
+  TunnelInput,
+  TunnelView,
+  TunnelsResponse,
   WhitelistMode,
   WhitelistResponse,
   WhitelistRule,
@@ -49,6 +52,7 @@ function send<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown
 
 const server = (id: string) => `servers/${encodeURIComponent(id)}`
 const req = (id: string) => `requests/${encodeURIComponent(id)}`
+const tunnel = (id: string) => `tunnels/${encodeURIComponent(id)}`
 
 export const api = {
   state: () => request<StateResponse>('state'),
@@ -78,6 +82,12 @@ export const api = {
   openTerminal: (serverId: string, cols: number, rows: number) => send<TerminalView>('POST', 'terminals', { serverId, cols, rows }),
   terminalTicket: (id: string) => send<{ ticket: string }>('POST', `terminals/${encodeURIComponent(id)}/ticket`),
   closeTerminal: (id: string) => send<{ closed: true }>('DELETE', `terminals/${encodeURIComponent(id)}`),
+  tunnels: () => request<TunnelsResponse>('tunnels'),
+  createTunnel: (input: TunnelInput) => send<TunnelView>('POST', 'tunnels', input),
+  updateTunnel: (id: string, input: TunnelInput) => send<TunnelView>('PUT', tunnel(id), input),
+  deleteTunnel: (id: string) => send<{ deleted: true }>('DELETE', tunnel(id)),
+  startTunnel: (id: string) => send<TunnelView>('POST', `${tunnel(id)}/start`),
+  stopTunnel: (id: string) => send<TunnelView>('POST', `${tunnel(id)}/stop`),
   interrupt: (id: string) => send<{ interrupted: true }>('POST', `${req(id)}/interrupt`),
   setPalette: (palette: HighlightPalette) => send<GuiSettings>('PUT', 'settings/palette', { palette }),
   setLineBreaks: (lineBreaks: LineBreakMode) => send<GuiSettings>('PUT', 'settings/line-breaks', { lineBreaks }),

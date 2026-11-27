@@ -333,3 +333,49 @@ export type TerminalServerMessage = { type: "output"; data: string } | { type: "
 export type TerminalClientMessage = { type: "input"; data: string } | { type: "resize"; cols: number; rows: number };
 
 export const MAX_COMMANDS_PER_REQUEST = 20;
+
+export const MAX_TUNNEL_NAME_LENGTH = 40;
+
+/**
+ * "stopped" : arrêté ; "starting" : connexion en cours ; "active" : le port local
+ * relaie vers le serveur ; "error" : l'ouverture a échoué ou la connexion est tombée.
+ */
+export type TunnelStatus = "stopped" | "starting" | "active" | "error";
+
+/** Tunnel enregistré : un port de cette machine relayé, par la connexion SSH d'un serveur, vers une adresse vue depuis ce serveur. */
+export interface TunnelDefinition {
+  id: string;
+  serverId: string;
+  /** Libellé libre ; vide quand l'utilisateur n'en a pas donné. */
+  name: string;
+  /** Port écouté sur 127.0.0.1. */
+  localPort: number;
+  /** Hôte joint depuis le serveur : `localhost` pour un service du serveur lui-même. */
+  remoteHost: string;
+  remotePort: number;
+  createdAt: string;
+}
+
+export type TunnelInput = Pick<TunnelDefinition, "serverId" | "name" | "localPort" | "remoteHost" | "remotePort">;
+
+export interface TunnelView extends TunnelDefinition {
+  status: TunnelStatus;
+  /** Raison de l'état "error" ; null sinon. */
+  error: string | null;
+  /** Vrai quand l'erreur vient du port local déjà occupé. */
+  portTaken: boolean;
+  startedAt: string | null;
+}
+
+/** Port TCP écouté sur cette machine par une autre application qu'un tunnel actif. */
+export interface LocalPortUse {
+  port: number;
+  /** Nom du programme, quand le système le communique. */
+  process: string | null;
+}
+
+export interface TunnelsResponse {
+  tunnels: TunnelView[];
+  /** Ports occupés sur cette machine hors tunnels actifs, par ordre croissant. */
+  localPorts: LocalPortUse[];
+}

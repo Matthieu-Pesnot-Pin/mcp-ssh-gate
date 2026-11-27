@@ -15,6 +15,7 @@ import { callTool } from "../src/tools/tools.js";
 import { RequestEventScanner } from "../src/core/watch.js";
 import { TerminalTickets } from "../src/core/terminal-tickets.js";
 import { SettingsStore } from "../src/core/settings-store.js";
+import { blocksLoopback, parseLsof, parseNetstat, parseProcessList, parseSs, portUses } from "../src/core/local-ports.js";
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-test-"));
@@ -237,4 +238,50 @@ test("purging closed sessions removes the expired ones with their journal and ke
   assert.ok(left.includes(recent.id));
   assert.ok(left.includes(open.id));
   assert.ok(left.includes(null));
+});
+
+test("listening ports are read from netstat and tasklist, whatever the system language", () => {
+  const netstat = [
+    "",
+    "Connexions actives",
+    "",
+    "  Proto  Adresse locale         Adresse distante       État",
+    "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1180",
+    "  TCP    127.0.0.1:5432         0.0.0.0:0              ABHÖREN         4321",
+    "  TCP    192.168.1.20:8443      0.0.0.0:0              LISTENING       77",
+    "  TCP    127.0.0.1:5432         127.0.0.1:61000        ESTABLISHED     4321",
+    "  TCP    [::1]:5173             [::]:0                 LISTENING       900",
+    "  UDP    0.0.0.0:5353           *:*                                    2000",
+  ].join("\r\n");
+  const listeners = parseNetstat(netstat);
+  assert.deepEqual(
+    listeners.map((l) => [l.address, l.port, l.pid]),
+    [["0.0.0.0", 135, 1180], ["127.0.0.1", 5432, 4321], ["192.168.1.20", 8443, 77], ["[::1]", 5173, 900]]
+  );
+  const names = parseProcessList("1180,svchost\r\n4321,postgres\r\n");
+  assert.equal(names.get(4321), "postgres");
+  const named = listeners.map((l) => ({ ...l, process: names.get(l.pid!) ?? null }));
+  assert.deepEqual(portUses(named, new Set([135])), [
+    { port: 5173, process: null },
+    { port: 5432, process: "postgres" },
+  ]);
+});
+
+test("listening ports are read from ss and lsof", () => {
+  const ss = [
+    'LISTEN 0      4096       127.0.0.1:5432      0.0.0.0:*    users:(("postgres",pid=812,fd=6))',
+    "LISTEN 0      128          0.0.0.0:22        0.0.0.0:*",
+    "LISTEN 0      4096   127.0.0.53%lo:53        0.0.0.0:*",
+    "LISTEN 0      511                *:3000            *:*    users:((\"node\",pid=99,fd=20))",
+  ].join("\n");
+  assert.deepEqual(
+    parseSs(ss).map((l) => [l.address, l.port, l.process]),
+    [["127.0.0.1", 5432, "postgres"], ["0.0.0.0", 22, null], ["127.0.0.53%lo", 53, null], ["*", 3000, "node"]]
+  );
+  const lsof = ["p501", "cnode", "f22", "n*:3000", "p77", "cpostgres", "f7", "n127.0.0.1:5432", "f8", "n[::1]:5432"].join("\n");
+  assert.deepEqual(portUses(parseLsof(lsof), new Set()), [
+    { port: 3000, process: "node" },
+    { port: 5432, process: "postgres" },
+  ]);
+  assert.ok(blocksLoopback("127.0.0.53%lo") && blocksLoopback("[::]") && !blocksLoopback("10.0.0.4"));
 });

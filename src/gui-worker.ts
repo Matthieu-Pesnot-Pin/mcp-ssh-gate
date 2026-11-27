@@ -25,6 +25,8 @@ import {
   type TerminalClientMessage,
   type TerminalsResponse,
   type TestConnectionResponse,
+  type TunnelInput,
+  type TunnelsResponse,
   type WhitelistResponse,
   type WhitelistTestResponse,
 } from "../shared/model.js";
@@ -41,6 +43,7 @@ import { SessionStore } from "./core/session-store.js";
 import { SettingsStore } from "./core/settings-store.js";
 import { TerminalTickets } from "./core/terminal-tickets.js";
 import { TerminalManager } from "./core/terminals.js";
+import { TunnelManager } from "./core/tunnels.js";
 import { WhitelistStore, evaluateCommand, evaluateRequest, type AppliedRules } from "./core/whitelist.js";
 import { liveWatcherSince } from "./core/watch.js";
 
@@ -76,6 +79,7 @@ const executor = new Executor(
   (agentId) => liveWatcherSince(config.dataDir, agentId) !== null
 );
 const terminals = new TerminalManager(servers, (message) => logger.info(message));
+const tunnels = new TunnelManager(config.dataDir, servers, (message) => logger.info(message));
 const keys = new KeyService(servers, executor, terminals, (message) => logger.info(message));
 const whitelist = new WhitelistStore(config.dataDir);
 const autoApprover = new AutoApprover(servers, requests, whitelist, executor, (message) => logger.info(message));
@@ -204,6 +208,7 @@ app.delete(
   handle((c) => {
     const server = servers.get(c.req.param("id")!);
     terminals.closeForServer(server.id);
+    tunnels.deleteForServer(server.id);
     executor.deleteServer(server.id);
     whitelist.deleteServer(server.id);
     return { deleted: true };
@@ -219,8 +224,22 @@ app.post(
 );
 app.post("/api/servers/:id/key", handle((c) => keys.installNewKey(c.req.param("id")!)));
 app.post("/api/servers/:id/key/rotate", handle((c) => keys.rotate(c.req.param("id")!)));
-app.post("/api/servers/:id/key/revoke", handle((c) => keys.revoke(c.req.param("id")!)));
-app.post("/api/servers/:id/key/forget", handle((c) => keys.forget(c.req.param("id")!)));
+app.post(
+  "/api/servers/:id/key/revoke",
+  handle(async (c) => {
+    const revoked = await keys.revoke(c.req.param("id")!);
+    tunnels.stopForServer(revoked.id);
+    return revoked;
+  })
+);
+app.post(
+  "/api/servers/:id/key/forget",
+  handle((c) => {
+    const forgotten = keys.forget(c.req.param("id")!);
+    tunnels.stopForServer(forgotten.id);
+    return forgotten;
+  })
+);
 app.post(
   "/api/servers/:id/disconnect",
   handle((c) => {
@@ -346,6 +365,23 @@ app.delete(
     return { closed: true };
   })
 );
+
+function tunnelInput(body: any): TunnelInput {
+  return { serverId: body?.serverId, name: body?.name, localPort: body?.localPort, remoteHost: body?.remoteHost, remotePort: body?.remotePort };
+}
+
+app.get("/api/tunnels", handle((): Promise<TunnelsResponse> => tunnels.response()));
+app.post("/api/tunnels", handle(async (c) => tunnels.create(tunnelInput(await readBody(c)))));
+app.put("/api/tunnels/:id", handle(async (c) => tunnels.update(c.req.param("id")!, tunnelInput(await readBody(c)))));
+app.delete(
+  "/api/tunnels/:id",
+  handle((c) => {
+    tunnels.delete(c.req.param("id")!);
+    return { deleted: true };
+  })
+);
+app.post("/api/tunnels/:id/start", handle((c) => tunnels.start(c.req.param("id")!)));
+app.post("/api/tunnels/:id/stop", handle((c) => tunnels.stop(c.req.param("id")!)));
 
 app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), staticRoot) }));
 

@@ -152,12 +152,12 @@ Un réglage requis absent ou invalide arrête le lancement avec un message qui d
 1. **Ajouter un serveur** dans l'interface : nom, hôte, port, utilisateur.
 2. Le MCP génère une paire `ed25519`. La clé privée est chiffrée avec `VAULT_KEY` dans `DATA_DIR/servers.json`.
 3. Colle la **commande d'installation** affichée dans une session ouverte sur le serveur, en tant que cet utilisateur. Sur une seule ligne, elle :
-   - écrit la clé dans un fichier propre à SSH Gate, `~/.ssh/authorized_keys.d/ssh-gate`, précédée de `restrict,pty` (pas de redirection de ports, d'agent ni de X11 ; pseudo-terminal autorisé pour les terminaux) ;
+   - écrit la clé dans un fichier propre à SSH Gate, `~/.ssh/authorized_keys.d/ssh-gate`, précédée de `restrict,pty,port-forwarding` (ni agent ni X11 ; pseudo-terminal autorisé pour les terminaux, redirection de ports pour les tunnels) ;
    - ajoute avec sudo `/etc/ssh/sshd_config.d/10-ssh-gate.conf`, qui fait lire ce fichier à sshd **en plus** de `~/.ssh/authorized_keys` ;
    - vérifie la configuration (`sshd -t`, puis `sshd -T` pour s'assurer que le fichier dédié est pris en compte) avant de recharger sshd. Sinon, le réglage ajouté est retiré et sshd n'est pas rechargé.
 
    `~/.ssh/authorized_keys` n'est jamais modifié : tes propres clés n'en dépendent pas. Le système doit lire `/etc/ssh/sshd_config.d/` (cas par défaut sur Debian et Ubuntu).
-4. **Tester la connexion** : l'empreinte de la clé d'hôte est enregistrée. Si elle change plus tard, la connexion est refusée. Changer l'hôte ou le port du serveur efface l'empreinte : il faut tester à nouveau. Le test limite aussi la ligne de la clé à l'adresse de SSH Gate vue par le serveur (`from="…"`) ; la nouvelle ligne est vérifiée par une seconde connexion, et remise dans son état d'origine si le serveur la refuse. Si l'adresse de SSH Gate change, seul son accès est coupé : recolle la commande d'installation.
+4. **Tester la connexion** : l'empreinte de la clé d'hôte est enregistrée. Si elle change plus tard, la connexion est refusée. Changer l'hôte ou le port du serveur efface l'empreinte : il faut tester à nouveau. Le test réécrit aussi la ligne de la clé avec les options attendues, limitée à l'adresse de SSH Gate vue par le serveur (`from="…"`) ; une ligne sans `port-forwarding` le reçoit ainsi. La nouvelle ligne est vérifiée par une seconde connexion, et remise dans son état d'origine si le serveur la refuse. Si l'adresse de SSH Gate change, seul son accès est coupé : recolle la commande d'installation.
 
 Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de commandes à ce serveur.
 
@@ -166,7 +166,7 @@ Tant que la connexion n'a pas été testée, l'agent ne peut pas soumettre de co
 Depuis le menu « … » du serveur. Seul le fichier dédié est écrit, par un fichier temporaire renommé.
 
 - **Renouveler la clé** : SSH Gate génère une nouvelle paire, l'ajoute à côté de l'actuelle, l'essaie sur une seconde connexion, puis ne garde qu'elle. Un échec avant la dernière étape retire la ligne ajoutée : la clé actuelle continue de fonctionner. Refusé si la clé figure aussi dans `~/.ssh/authorized_keys`, où elle resterait valable.
-- **Révoquer la clé** : SSH Gate vide son fichier, vérifie que le serveur refuse désormais la clé, ferme les shells de ses sessions et ses terminaux, puis efface la paire. Le serveur reste dans la liste ; « Installer une clé » en génère une nouvelle. Si le serveur ne répond pas, l'interface donne la commande à lancer soi-même (`: > ~/.ssh/authorized_keys.d/ssh-gate`) puis efface la clé.
+- **Révoquer la clé** : SSH Gate vide son fichier, vérifie que le serveur refuse désormais la clé, ferme les shells de ses sessions et ses terminaux, arrête ses tunnels, puis efface la paire. Le serveur reste dans la liste ; « Installer une clé » en génère une nouvelle. Si le serveur ne répond pas, l'interface donne la commande à lancer soi-même (`: > ~/.ssh/authorized_keys.d/ssh-gate`) puis efface la clé.
 
 ## Les outils
 
@@ -287,6 +287,20 @@ Chaque serveur a aussi sa ligne **Terminaux**, au-dessus de « Vous » : elle n'
 - La session reste ouverte si tu fermes la page : en revenant, la fin de la sortie est réaffichée. Elle se termine avec **Fermer la session**, la croix de l'onglet, ou quand le shell distant s'arrête. Un arrêt du worker ferme tous les terminaux.
 - **L'agent n'y a pas accès** : rien de ce qui s'y passe n'apparaît dans le journal ni dans les notifications.
 - Le flux passe par une WebSocket (`/api/terminals/<id>/stream`), dont l'adresse est relative au chemin de la page. Le gateway manager la relaie vers le worker (le proxy local de proxy-setup ne relaie pas les WebSockets). Pour l'ouvrir, la page obtient d'abord un ticket à usage unique, valable 30 secondes, par `POST /api/terminals/<id>/ticket` : une page d'un autre site ne peut pas l'obtenir, et la poignée de main ne dépend pas de l'origine, que le worker ne connaît pas derrière un proxy.
+
+## Tunnels
+
+L'entrée **Tunnels** de la barre latérale rend des services de tes serveurs joignables sur des ports de ta machine : une base de données ou une interface web qui n'écoute qu'en local sur le serveur, par exemple. Chaque serveur a aussi sa ligne **Tunnels**, qui n'affiche que les siens.
+
+- Un tunnel relie `localhost:<port local>` à une adresse vue depuis le serveur : `localhost:<port>` pour un service du serveur lui-même, ou un autre hôte qu'il joint (`10.0.4.22:6379`).
+- **Nouveau tunnel** reprend le port du serveur comme port local. S'il est déjà pris, par un autre tunnel ou par une autre application, la fenêtre dit par qui et propose des ports libres. Elle liste aussi les ports des tunnels, et ceux des autres applications proches du port saisi.
+- La vue **Par port local** liste tous les ports occupés sur ta machine, tunnels et autres applications, triés par numéro. Un tunnel arrêté garde son port réservé.
+- L'interrupteur démarre ou arrête un tunnel. Au démarrage, SSH Gate ouvre une connexion SSH propre au tunnel, vérifie que le serveur joint l'adresse distante, puis écoute le port local. En cas d'échec (port pris, rien n'écoute côté serveur, redirection refusée), la ligne passe en erreur avec sa raison. Si le port local est pris, **Changer de port** rouvre la fenêtre.
+- Les ports n'écoutent que sur `127.0.0.1` : seule ta machine les joint.
+- Les tunnels sont enregistrés dans `DATA_DIR/tunnels.json`, mais **tous démarrent arrêtés** au lancement de SSH Gate : tu les rallumes à la main. Un arrêt du worker les ferme.
+- **L'agent n'y a pas accès** : aucun outil MCP ne crée, ouvre ni ferme de tunnel.
+- La clé doit porter l'option `port-forwarding`. Si la ligne posée sur le serveur ne l'a pas, **Tester la connexion** la réécrit. Si l'erreur persiste, vérifie `AllowTcpForwarding` dans la configuration de sshd.
+- Les ports occupés sont relevés avec `netstat -ano` et PowerShell (`Get-Process`) sous Windows, `lsof` sous macOS et `ss` sous Linux. Si le relevé échoue, la page Tunnels affiche l'erreur.
 
 ## Architecture
 

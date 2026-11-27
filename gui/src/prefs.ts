@@ -36,8 +36,8 @@ export function useSidebarWidth(): [number, (width: number) => void] {
   return [width, update]
 }
 
-/** Dernier onglet ouvert dans un serveur : une session (null pour « Vous ») ou ses terminaux. */
-export type LastView = { kind: 'session'; sessionId: string | null } | { kind: 'terminals' }
+/** Dernier onglet ouvert dans un serveur : une session (null pour « Vous »), ses terminaux ou ses tunnels. */
+export type LastView = { kind: 'session'; sessionId: string | null } | { kind: 'terminals' } | { kind: 'tunnels' }
 
 /** Derniers onglets ouverts par serveur, gardés par ce navigateur. */
 export function readLastViews(): Record<string, LastView> {

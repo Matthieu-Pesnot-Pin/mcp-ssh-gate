@@ -11,11 +11,12 @@ export const REVOKE_COMMAND = `: > ~/${DEDICATED_KEY_FILE}`;
 
 /**
  * Ligne du fichier dédié : `restrict` coupe redirections, agent et X11 ;
- * `pty` rend le pseudo-terminal des terminaux interactifs ; `from` limite la
- * clé à l'adresse de SSH Gate.
+ * `pty` rend le pseudo-terminal des terminaux interactifs ; `port-forwarding`
+ * rend la redirection de ports des tunnels ; `from` limite la clé à l'adresse
+ * de SSH Gate.
  */
 export function keyLine(publicKey: string, allowedFrom: string | null = null): string {
-  return `restrict,pty${allowedFrom ? `,from="${allowedFrom}"` : ""} ${publicKey.trim()}`;
+  return `restrict,pty,port-forwarding${allowedFrom ? `,from="${allowedFrom}"` : ""} ${publicKey.trim()}`;
 }
 
 /**

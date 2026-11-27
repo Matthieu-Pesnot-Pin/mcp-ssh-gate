@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import ssh2, { type Connection } from "ssh2";
@@ -12,6 +13,7 @@ import type { GateRequest } from "../shared/model.js";
 import type { TerminalServerMessage } from "../shared/model.js";
 import { Executor } from "../src/core/executor.js";
 import { TerminalManager } from "../src/core/terminals.js";
+import { TunnelManager } from "../src/core/tunnels.js";
 import { KeyService } from "../src/core/keys.js";
 import { AuthRefusedError } from "../src/core/errors.js";
 import { connectSsh } from "../src/core/ssh-session.js";
@@ -43,8 +45,9 @@ function keysIn(file: string): string[] {
 }
 
 /**
- * Faux serveur SSH : exécute chaque `exec` dans un bash local et sert un
- * `shell` par un bash qui lit son entrée standard. Avec une clé, il accepte
+ * Faux serveur SSH : exécute chaque `exec` dans un bash local, sert un
+ * `shell` par un bash qui lit son entrée standard, et relie chaque canal
+ * direct-tcpip au port demandé sur 127.0.0.1. Avec une clé, il accepte
  * cette clé ; avec un dossier personnel, il accepte les clés de
  * `.ssh/authorized_keys.d/ssh-gate` et `.ssh/authorized_keys`, et les commandes
  * s'exécutent avec ce dossier pour HOME.
@@ -71,6 +74,18 @@ function startFakeSshServer(access: { key: string } | { home: string }): Promise
       ctx.reject(["publickey"]);
     });
     client.on("ready", () => {
+      client.on("tcpip", (accept, reject, info) => {
+        const target = net.connect(info.destPort, "127.0.0.1");
+        let opened = false;
+        target.on("error", () => (opened ? target.destroy() : reject()));
+        target.once("connect", () => {
+          opened = true;
+          const channel = accept();
+          channel.pipe(target).pipe(channel);
+          channel.on("close", () => target.destroy());
+          target.on("close", () => channel.close());
+        });
+      });
       client.on("session", (accept) => {
         const session = accept();
         session.on("pty", (acceptPty, _reject, info) => {
@@ -393,11 +408,11 @@ test("the key lives in the dedicated file: restricted at test, rotated, then rev
 test("the install command writes the dedicated file and only reloads sshd after checking it", () => {
   const command = installCommand("ssh-ed25519 AAAAKEY mcp-ssh-gate@prod");
   assert.ok(!command.includes("\n"));
-  assert.match(command, /printf '%s\\n' 'restrict,pty ssh-ed25519 AAAAKEY mcp-ssh-gate@prod' > ~\/\.ssh\/authorized_keys\.d\/ssh-gate/);
+  assert.match(command, /printf '%s\\n' 'restrict,pty,port-forwarding ssh-ed25519 AAAAKEY mcp-ssh-gate@prod' > ~\/\.ssh\/authorized_keys\.d\/ssh-gate/);
   assert.match(command, /AuthorizedKeysFile \.ssh\/authorized_keys \.ssh\/authorized_keys\.d\/ssh-gate/);
   assert.match(command, /if sudo sshd -t && sudo sshd -T .* \| grep -q 'authorized_keys\.d\/ssh-gate'; then unit=sshd; .*ssh\.service\)" = loaded \] && unit=ssh; sudo systemctl try-reload-or-restart "\$unit\.service"/);
   assert.match(command, /else sudo rm -f \/etc\/ssh\/sshd_config\.d\/10-ssh-gate\.conf/);
-  assert.equal(keyLine("ssh-ed25519 AAAAKEY c", "203.0.113.7"), 'restrict,pty,from="203.0.113.7" ssh-ed25519 AAAAKEY c');
+  assert.equal(keyLine("ssh-ed25519 AAAAKEY c", "203.0.113.7"), 'restrict,pty,port-forwarding,from="203.0.113.7" ssh-ed25519 AAAAKEY c');
 });
 
 test("questions: asked on a statement of a command, kept in line when commands are edited or removed", () => {
@@ -425,4 +440,85 @@ test("questions: asked on a statement of a command, kept in line when commands a
 
   executor.cancelQuestion(request.id, left.id);
   assert.deepEqual(requests.get(request.id).questions, []);
+});
+
+function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const probe = net.createServer().listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as net.AddressInfo).port;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+function exchange(port: number, message: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1", () => socket.write(message));
+    socket.once("data", (data) => {
+      resolve(data.toString());
+      socket.destroy();
+    });
+    socket.once("error", reject);
+  });
+}
+
+test("a tunnel relays a local port to an address seen from the server, and frees it when stopped", async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-gate-tunnel-"));
+  const servers = new ServerStore(dataDir, parseVaultKey(generateVaultKey()));
+  const tunnels = new TunnelManager(dataDir, servers, () => {});
+
+  const placeholder = servers.create({ name: "local", host: "127.0.0.1", port: 22, username: "tester" });
+  const fake = await startFakeSshServer({ key: placeholder.publicKey! });
+  const echo = net.createServer((socket) => socket.on("data", (data) => socket.write(`echo:${data}`)));
+  await new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve));
+  const remotePort = (echo.address() as net.AddressInfo).port;
+  t.after(() => {
+    tunnels.stopForServer("local");
+    echo.close();
+    fake.close();
+  });
+  servers.update("local", { name: "local", host: "127.0.0.1", port: fake.port, username: "tester" });
+
+  const localPort = await freePort();
+  const input = { serverId: "local", name: "Echo", localPort, remoteHost: "localhost", remotePort };
+  const untested = await tunnels.create(input);
+  assert.equal(untested.status, "error");
+  assert.match(untested.error ?? "", /Teste la connexion/);
+  tunnels.delete(untested.id);
+
+  const executor = new Executor(servers, new RequestStore(dataDir), new SessionStore(dataDir), () => {}, () => false);
+  await executor.testConnection("local");
+  executor.disconnect("local");
+
+  const tunnel = await tunnels.create(input);
+  assert.equal(tunnel.status, "active", tunnel.error ?? "");
+  assert.equal(await exchange(localPort, "ping"), "echo:ping");
+  assert.ok(!(await tunnels.response()).localPorts.some((use) => use.port === localPort));
+
+  await assert.rejects(tunnels.create({ ...input, name: "Other" }), /déjà attribué au tunnel Echo de local/);
+
+  assert.equal(tunnels.stop(tunnel.id).status, "stopped");
+  await assert.rejects(exchange(localPort, "ping"));
+  assert.equal(new TunnelManager(dataDir, servers, () => {}).list()[0].status, "stopped");
+
+  const closedPort = await freePort();
+  const refused = await tunnels.update(tunnel.id, { ...input, remotePort: closedPort });
+  assert.equal(refused.status, "stopped");
+  const failed = await tunnels.start(tunnel.id);
+  assert.equal(failed.status, "error");
+  assert.equal(failed.error, `Rien ne répond sur localhost:${closedPort} depuis local.`);
+
+  const busy = net.createServer();
+  await new Promise<void>((resolve) => busy.listen(0, "127.0.0.1", resolve));
+  t.after(() => busy.close());
+  const busyPort = (busy.address() as net.AddressInfo).port;
+  await assert.rejects(tunnels.update(tunnel.id, { ...input, localPort: busyPort }), new RegExp(`port local ${busyPort} est déjà pris`));
+
+  const restarted = await tunnels.update(tunnel.id, input);
+  assert.equal(restarted.status, "active", restarted.error ?? "");
+  assert.equal(await exchange(localPort, "again"), "echo:again");
+
+  tunnels.deleteForServer("local");
+  assert.deepEqual(tunnels.list(), []);
+  await assert.rejects(exchange(localPort, "ping"));
 });

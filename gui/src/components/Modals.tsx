@@ -250,7 +250,7 @@ export function ServerModal({ server: initial, onClose, onSaved }: ServerModalPr
           <div className="section-title">Ce qu'elle fait</div>
           <div className="does-row">
             <FileKey size={16} />
-            Écrit la clé dans ~/{DEDICATED_KEY_FILE}, limitée par restrict,pty
+            Écrit la clé dans ~/{DEDICATED_KEY_FILE}, limitée par restrict,pty,port-forwarding
           </div>
           <div className="does-row">
             <Settings size={16} />

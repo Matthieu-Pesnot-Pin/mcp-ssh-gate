@@ -86,7 +86,7 @@ export class KeyService {
     private readonly log: (message: string) => void
   ) {}
 
-  /** Relève la place de la clé et limite sa ligne à l'adresse de SSH Gate vue par le serveur. */
+  /** Relève la place de la clé et réécrit sa ligne avec les options de `keyLine`, limitée à l'adresse de SSH Gate vue par le serveur. */
   async restrictToGate(serverId: string): Promise<KeyFileStatus> {
     const server = this.servers.get(serverId);
     const publicKey = requireKey(server);
@@ -102,20 +102,22 @@ export class KeyService {
 
       const current = allowedFromOf(found.line);
       const address = found.clientAddress && ADDRESS.test(found.clientAddress) ? found.clientAddress : null;
-      if (!address) return status(current, "Le serveur n'indique pas l'adresse de SSH Gate (SSH_CLIENT vide) : la limite d'adresse n'est pas posée.");
+      const missingAddress = address ? null : "Le serveur n'indique pas l'adresse de SSH Gate (SSH_CLIENT vide) : la limite d'adresse n'est pas posée.";
+      const allowedFrom = address ?? current;
 
-      const wanted = keyLine(publicKey, address);
-      if (found.line === wanted) return status(address, null);
+      const wanted = keyLine(publicKey, allowedFrom);
+      if (found.line === wanted) return status(allowedFrom, missingAddress);
 
       await writeKeys(client, [wanted]);
       try {
         await probe(target);
       } catch (err: any) {
         await writeKeys(client, [found.line]);
-        return status(current, `La limite à ${address} a été refusée par le serveur, la ligne d'origine est remise : ${err.message}`);
+        const refused = address ? `La limite à ${address} a été refusée` : "La nouvelle ligne de la clé a été refusée";
+        return status(current, `${refused} par le serveur, la ligne d'origine est remise : ${err.message}`);
       }
-      this.log(`Key of ${server.id} restricted to ${address}`);
-      return status(address, null);
+      this.log(`Key line of ${server.id} rewritten${address ? `, restricted to ${address}` : ""}`);
+      return status(allowedFrom, missingAddress);
     } finally {
       client.end();
     }

@@ -8,6 +8,7 @@ import { readLastViews, useSidebarWidth, writeLastViews, type LastView } from '.
 import { Sidebar } from './components/Sidebar'
 import { ServerScreen } from './components/ServerScreen'
 import { TerminalsScreen } from './components/TerminalsScreen'
+import { TunnelsScreen } from './components/TunnelsScreen'
 import { WhitelistScreen, type WhitelistScope } from './components/Whitelist'
 import { ConfirmDeleteModal, EditServerModal, RevokeKeyModal, RotateKeyModal, ServerModal, SettingsModal } from './components/Modals'
 
@@ -28,6 +29,18 @@ function terminalsFromHash(): TerminalsView | null {
 
 function terminalsHash(serverId: string | null): string {
   return serverId ? `${TERMINALS_HASH}/${encodeURIComponent(serverId)}` : TERMINALS_HASH
+}
+
+const TUNNELS_HASH = '#tunnels'
+
+/** Adresse de la vue Tunnels : `#tunnels` pour tous les serveurs, `#tunnels/<serveur>` pour un seul. */
+function tunnelsFromHash(): TerminalsView | null {
+  const match = /^#tunnels(?:\/([^/]+))?$/.exec(window.location.hash)
+  return match ? { serverId: match[1] ? decodeURIComponent(match[1]) : null } : null
+}
+
+function tunnelsHash(serverId: string | null): string {
+  return serverId ? `${TUNNELS_HASH}/${encodeURIComponent(serverId)}` : TUNNELS_HASH
 }
 
 const WHITELIST_HASH = '#liste-blanche'
@@ -72,8 +85,10 @@ function defaultSessionId(server: ServerView): string | null {
 export default function App() {
   const state = usePolling('state', api.state, 2000)
   const terminals = usePolling('terminals', api.terminals, 2500)
+  const tunnels = usePolling('tunnels', api.tunnels, 3000)
   const [selection, setSelection] = useState<Selection | null>(selectionFromHash)
   const [terminalsView, setTerminalsView] = useState<TerminalsView | null>(terminalsFromHash)
+  const [tunnelsView, setTunnelsView] = useState<TerminalsView | null>(tunnelsFromHash)
   const [whitelistView, setWhitelistView] = useState<{ scope: WhitelistScope } | null>(whitelistFromHash)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -84,6 +99,7 @@ export default function App() {
     const onHash = () => {
       setSelection(selectionFromHash())
       setTerminalsView(terminalsFromHash())
+      setTunnelsView(tunnelsFromHash())
       setWhitelistView(whitelistFromHash())
     }
     window.addEventListener('hashchange', onHash)
@@ -111,6 +127,8 @@ export default function App() {
   const sessionGone = !!selected && !!wantedSessionId && !selectedSession
   const terminalsServer = terminalsView?.serverId ? servers.find((s) => s.id === terminalsView.serverId) ?? null : null
   const terminalsServerGone = !!state.data && !!terminalsView?.serverId && !terminalsServer
+  const tunnelsServer = tunnelsView?.serverId ? servers.find((s) => s.id === tunnelsView.serverId) ?? null : null
+  const tunnelsServerGone = !!state.data && !!tunnelsView?.serverId && !tunnelsServer
 
   useEffect(() => {
     if (sessionGone && selected) window.location.hash = sessionHash(selected.id, null)
@@ -120,14 +138,18 @@ export default function App() {
     if (terminalsServerGone) window.location.hash = TERMINALS_HASH
   }, [terminalsServerGone])
 
-  const visitedServerId = terminalsView ? terminalsView.serverId : selection?.serverId ?? null
-  const visitedSessionId = terminalsView ? null : selection?.sessionId ?? null
+  useEffect(() => {
+    if (tunnelsServerGone) window.location.hash = TUNNELS_HASH
+  }, [tunnelsServerGone])
+
+  const visitedServerId = terminalsView ? terminalsView.serverId : tunnelsView ? tunnelsView.serverId : selection?.serverId ?? null
+  const visitedSessionId = terminalsView || tunnelsView ? null : selection?.sessionId ?? null
   useEffect(() => {
     if (!visitedServerId) return
-    const view: LastView = terminalsView ? { kind: 'terminals' } : { kind: 'session', sessionId: visitedSessionId }
+    const view: LastView = terminalsView ? { kind: 'terminals' } : tunnelsView ? { kind: 'tunnels' } : { kind: 'session', sessionId: visitedSessionId }
     lastViews.current = { ...lastViews.current, [visitedServerId]: view }
     writeLastViews(lastViews.current)
-  }, [visitedServerId, visitedSessionId, terminalsView])
+  }, [visitedServerId, visitedSessionId, terminalsView, tunnelsView])
 
   /**
    * Clic sur un serveur : une session qui a une demande en attente (le dernier onglet
@@ -145,6 +167,10 @@ export default function App() {
     }
     if (last?.kind === 'terminals') {
       window.location.hash = terminalsHash(id)
+      return
+    }
+    if (last?.kind === 'tunnels') {
+      window.location.hash = tunnelsHash(id)
       return
     }
     if (last && (server?.sessions.some((s) => s.id === last.sessionId) || server?.closedSessions.some((s) => s.id === last.sessionId))) {
@@ -180,10 +206,13 @@ export default function App() {
         width={sidebarWidth}
         onResize={setSidebarWidth}
         servers={servers}
-        selectedId={whitelistView ? null : terminalsView ? terminalsView.serverId : selected?.id ?? null}
+        selectedId={whitelistView ? null : terminalsView ? terminalsView.serverId : tunnelsView ? tunnelsView.serverId : selected?.id ?? null}
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={select}
         terminalsView={terminalsView}
+        tunnelsView={tunnelsView}
+        tunnels={tunnels.data?.tunnels ?? []}
+        onOpenTunnels={(serverId) => (window.location.hash = tunnelsHash(serverId))}
         whitelistOpen={!!whitelistView}
         onOpenWhitelist={() => (window.location.hash = WHITELIST_HASH)}
         terminals={terminalList}
@@ -198,6 +227,15 @@ export default function App() {
           servers={servers}
           scope={whitelistView.scope !== null && state.data && !servers.some((s) => s.id === whitelistView.scope) ? null : whitelistView.scope}
           onScope={(scope) => (window.location.hash = whitelistHash(scope))}
+          onError={setNotice}
+        />
+      ) : tunnelsView ? (
+        <TunnelsScreen
+          servers={servers}
+          server={tunnelsServer}
+          data={tunnels.data}
+          loadError={tunnels.error}
+          onChanged={tunnels.reload}
           onError={setNotice}
         />
       ) : terminalsView ? (
@@ -253,6 +291,7 @@ export default function App() {
           onSaved={(server) => {
             onSaved(server)
             terminals.reload()
+            tunnels.reload()
           }}
         />
       )}
@@ -265,6 +304,7 @@ export default function App() {
             setDialog(null)
             window.location.hash = ''
             state.reload()
+            tunnels.reload()
           }}
         />
       )}
